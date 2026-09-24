@@ -12,3 +12,4 @@ weights/*.onnx
 weights/*.xml
 weights/*.bin
 weights/*.engine
+weights/*.safetensors

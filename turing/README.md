@@ -36,7 +36,7 @@ T09 tutorial ONNX          eval scaffold only, not product
 ```
 
 **Implemented (2026-09-18):** T01–T05 kernels, T02 decode+ros_bridge, T06 pack, T07 `compose_tick` + Lyrical `adapter_node`, T12 seam.  
-**On disk:** YOLOE-26s OpenVINO IR (`weights/yoloe-26s-seg.xml`). **No DummySource.** Outdoor product `infer` still needs a Dev 5 Image+CameraInfo stream.  
+**On disk:** YOLOE-26s OpenVINO IR (`weights/yoloe-26s-seg.xml`). RUGD SegFormer-B5 OpenVINO IR (`weights/rugd-segformer.xml`, 25 RUGD classes, Arc `device=GPU`). Live adapter remains YOLOE. **No DummySource.** Outdoor product `infer` still needs a Dev 5 Image+CameraInfo stream.  
 T10 uses header/label fixtures. T11 policy (latest-only queue + starve watchdog) **shipped**; live p95 waits on Dev 5. Outdoor camera is Dev 5.
 
 Runtime: Intel Arc B580 **now** (OpenVINO 2026.4.0, `device=GPU`). ROS 2 **Lyrical** on this RHEL 10 box. Later NVIDIA, less VRAM (CUDA + PyTorch). See [HARDWARE.md](HARDWARE.md).
