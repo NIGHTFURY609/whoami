@@ -51,6 +51,7 @@ def test_wr1_wr2_wr4_wr5_happy_topics() -> None:
     adapter = FixtureAdapter()
     node = PerceptionAdapterNode(
         adapter=adapter,
+        adapter_id="yoloe",
         now_ns_fn=lambda: _STAMP + 10_000_000,
     )
     helper = Node("t10_cam_pub")
@@ -106,6 +107,7 @@ def test_wr3_stale_degrades_no_mask() -> None:
     adapter = FixtureAdapter()
     node = PerceptionAdapterNode(
         adapter=adapter,
+        adapter_id="yoloe",
         now_ns_fn=lambda: _STAMP + 600_000_000,
     )
     helper = Node("t10_cam_stale")

@@ -63,17 +63,25 @@ class PerceptionAdapterNode(Node):
         freshness_path: Path | None = None,
         now_ns_fn: object | None = None,
         queue_depth: object | None = None,
+        adapter_id: str | None = None,
     ) -> None:
         if queue_depth is not None and (type(queue_depth) is not int or queue_depth != 1):
             raise TypeError("queue_depth must be Python int == 1")
-        super().__init__("ugv_perception")
-        self.declare_parameter("adapter", "yoloe")
+        from rclpy.parameter import Parameter
+
+        overrides = []
+        if adapter_id is not None:
+            if type(adapter_id) is not str or adapter_id == "":
+                raise TypeError("adapter_id must be a non-empty str")
+            overrides.append(Parameter("adapter", Parameter.Type.STRING, adapter_id))
+        super().__init__("ugv_perception", parameter_overrides=overrides)
+        self.declare_parameter("adapter", "rugd")
         self.declare_parameter("image_topic", "/camera/image_raw")
         self.declare_parameter("camera_info_topic", "/camera/camera_info")
         self.declare_parameter("queue_depth", 1)
         adapter_name = self.get_parameter("adapter").get_parameter_value().string_value
-        if adapter_name != "yoloe":
-            raise ValueError("adapter:=onnx is illegal until T09; only yoloe")
+        if adapter_name not in ("rugd", "yoloe"):
+            raise ValueError("adapter:=onnx is illegal until T09; live adapter is rugd")
         raw_depth = (
             queue_depth
             if queue_depth is not None
@@ -81,8 +89,8 @@ class PerceptionAdapterNode(Node):
         )
         if type(raw_depth) is not int or raw_depth != 1:
             raise TypeError("queue_depth must be Python int == 1")
-        remap_path = remap_path or _ROOT / "config" / "ontologies" / "yoloe.yaml"
-        gates_path = gates_path or _ROOT / "config" / "perception" / "yoloe.yaml"
+        remap_path = remap_path or _ROOT / "config" / "ontologies" / f"{adapter_name}.yaml"
+        gates_path = gates_path or _ROOT / "config" / "perception" / f"{adapter_name}.yaml"
         freshness_path = freshness_path or _ROOT / "config" / "perception" / "port.yaml"
         table, gates, fresh = load_compose_configs(
             remap_path=remap_path,
@@ -201,17 +209,9 @@ class PerceptionAdapterNode(Node):
 
 
 def main() -> None:
-    from ugv_perception.adapter.prompts import load_prompts
-    from ugv_perception.adapter.yoloe import YoloeAdapter, load_adapter_config
-    from ugv_perception.backend.factory import build_backend
+    from ugv_perception.backend.rugd_live import build_live_adapter
 
-    cfg = load_adapter_config(_ROOT / "config" / "adapters" / "yoloe.yaml")
-    prompts = load_prompts(
-        _ROOT / "config" / "perception" / "yoloe_prompts.yaml",
-        _ROOT / "config" / "ontologies" / "yoloe.yaml",
-    )
-    backend = build_backend(cfg["backend"], str(_ROOT / cfg["weights"]), prompts)
-    adapter = YoloeAdapter(backend, prompts)
+    adapter = build_live_adapter(_ROOT)
     rclpy.init()
     node = PerceptionAdapterNode(adapter=adapter)
     try:

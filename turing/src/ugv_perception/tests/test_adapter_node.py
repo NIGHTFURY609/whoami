@@ -48,6 +48,7 @@ def test_adapter_node_spin_fixture_topics() -> None:
     spy = SpyAdapter()
     node = PerceptionAdapterNode(
         adapter=spy,
+        adapter_id="yoloe",
         now_ns_fn=lambda: _STAMP + 100_000_000,
     )
     helper = Node("test_cam_pub")

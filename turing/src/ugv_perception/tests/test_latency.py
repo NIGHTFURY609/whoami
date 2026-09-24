@@ -74,6 +74,7 @@ def test_l1_image_and_camera_info_keep_last_depth_1() -> None:
     rclpy.init()
     node = PerceptionAdapterNode(
         adapter=FixtureAdapter(),
+        adapter_id="yoloe",
         now_ns_fn=lambda: _STAMP + 10_000_000,
     )
     try:
@@ -116,7 +117,7 @@ def test_l4_l5_slow_infer_skips_ahead_original_stamps() -> None:
     def now_ns() -> int:
         return clock["n"]
 
-    node = PerceptionAdapterNode(adapter=adapter, now_ns_fn=now_ns)
+    node = PerceptionAdapterNode(adapter=adapter, now_ns_fn=now_ns, adapter_id="yoloe")
     helper = Node("t11_burst")
     pub_i = helper.create_publisher(Image, "/camera/image_raw", 10)
     pub_c = helper.create_publisher(CameraInfo, "/camera/camera_info", camera_info_qos())
@@ -191,6 +192,7 @@ def test_l6_stale_tick_no_mask() -> None:
     node = PerceptionAdapterNode(
         adapter=adapter,
         now_ns_fn=lambda: _STAMP + 600_000_000,
+        adapter_id="yoloe",
     )
     helper = Node("t11_stale")
     pub_i = helper.create_publisher(Image, "/camera/image_raw", 10)
@@ -230,7 +232,7 @@ def test_l7_watchdog_degrades_while_infer_blocked() -> None:
     def now_ns() -> int:
         return clock["n"]
 
-    node = PerceptionAdapterNode(adapter=adapter, now_ns_fn=now_ns)
+    node = PerceptionAdapterNode(adapter=adapter, now_ns_fn=now_ns, adapter_id="yoloe")
     helper = Node("t11_watch")
     pub_i = helper.create_publisher(Image, "/camera/image_raw", 10)
     pub_c = helper.create_publisher(CameraInfo, "/camera/camera_info", camera_info_qos())
@@ -285,6 +287,7 @@ def test_l9_no_cmd_vel() -> None:
     rclpy.init()
     node = PerceptionAdapterNode(
         adapter=FixtureAdapter(),
+        adapter_id="yoloe",
         now_ns_fn=lambda: _STAMP + 10_000_000,
     )
     try:

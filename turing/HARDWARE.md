@@ -52,7 +52,7 @@ B580 is the development card, not the floor. Assume the NVIDIA has **less** VRAM
 
 - One frame in flight (latest-only queue; T11).
 - YOLOE and Depth Anything **sequential on the same frame** if both run.
-- Default adapter weights: **YOLOE-26s-seg** OpenVINO IR (`yoloe-26s-seg.xml`). 26m only if 26s is weak and VRAM allows.
+- Default adapter weights: **RUGD SegFormer-B5** OpenVINO IR (`rugd-segformer.xml`). YOLOE-26s stays on disk, not live.
 - No extra GPU copies; no keeping RGB + mask + depth + two models resident if it blows the small card.
 - INT8 / extra compression is later, not a dummy-mask shortcut.
 
@@ -68,5 +68,5 @@ B580 is the development card, not the floor. Assume the NVIDIA has **less** VRAM
 - Work is on a **desktop**. Outdoor live training/testing is **later**.
 - **No camera device.** Dev 1 **consumes** `Image` + `CameraInfo` (T02 `decode_frame` + `ros_bridge`; T07 node subscribes). Dev 5 owns the driver.
 - T02/T07 ROS path is **tested** with fixture messages (shared executor). That is not a dummy camera driver.
-- **No training.** Default weights pin: **YOLOE-26s-seg** IR — **on disk** at `weights/yoloe-26s-seg.xml`.
+- **No training.** Default weights pin: **RUGD SegFormer-B5** IR — **on disk** at `weights/rugd-segformer.xml`.
 - T12 live `run` uses that IR on `device=GPU`. T06 outdoor product `infer` and T11 still wait on a Dev 5 stream.

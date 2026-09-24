@@ -62,7 +62,7 @@ Baylands / RUGD / tutorial ONNX = eval/scaffold only.
               ▼                         ▼
    ┌────────────────────┐     ┌────────────────────┐
    │ Adapters (sources) │     │ RTAB-Map           │
-   │ YOLOE / ONNX / …   │     │ pose + map         │
+   │ RUGD SegFormer     │     │ pose + map         │
    │ remap→canonical    │     │ mapping|localize   │
    │ normalize conf     │     │ (does NOT use mask)│
    └─────────┬──────────┘     └─────────┬──────────┘
@@ -96,8 +96,7 @@ Baylands / RUGD / tutorial ONNX = eval/scaffold only.
 | Vision recommended / minimum | Stereo·RGB-D / mono | §10 |
 | **Brain** | RTAB-Map + Nav2 (Smac2D + RPP) | |
 | **Perception Port** | Canonical mask + conf + freshness + frame | §8 |
-| Adapter default outdoor | YOLOE | Source only |
-| Terrain IR on disk | RUGD SegFormer-B5 | OpenVINO `device=GPU`, 25 RUGD classes. Not the live adapter. |
+| Adapter default outdoor | RUGD SegFormer-B5 | OpenVINO `device=GPU`. 25 RUGD classes remapped to {0,1,2}. YOLOE stays selectable, not live. |
 | Adapter scaffold | Tutorial ONNX | Remapped |
 | **Safety authority** | Priority mux / watchdog | §3.1 · §12 |
 | Optional geometry | Depth Anything → VoxelLayer | Geometry side-channel only; conflict rules = §9 (geometry lethal wins; semantic never clears it) |

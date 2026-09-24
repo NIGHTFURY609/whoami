@@ -1,7 +1,7 @@
 """Eval 2: live PerceptionAdapterNode + Image/CameraInfo publisher.
 
 Stand-in for Dev 5 topics. Not outdoor. Not live_cam. Not DummySource.
-YOLOE-26s OpenVINO GPU is the product adapter.
+RUGD SegFormer-B5 OpenVINO GPU is the product adapter.
 """
 
 from __future__ import annotations
@@ -24,14 +24,12 @@ import rclpy
 from rclpy.executors import SingleThreadedExecutor
 from rclpy.node import Node
 
-from ugv_perception.adapter.prompts import load_prompts
-from ugv_perception.adapter.yoloe import YoloeAdapter, load_adapter_config
-from ugv_perception.backend.factory import build_backend
+from ugv_perception.backend.rugd_live import build_live_adapter
 from ugv_perception.node.adapter_node import PerceptionAdapterNode, camera_info_qos
 from ugv_perception.port.ids import CANONICAL, CONF_ENCODING, MASK_ENCODING
 
 _ROOT = Path(__file__).resolve().parents[3]
-_IR = _ROOT / "weights" / "yoloe-26s-seg.xml"
+_IR = _ROOT / "weights" / "rugd-segformer.xml"
 _PHOTO = _ROOT / "thetestimage1.jpg"
 _NS = 1_000_000_000
 _STAMP = 2_000_000_000
@@ -56,19 +54,13 @@ def _k_for(hw: tuple[int, int]) -> tuple[float, ...]:
 
 
 @pytest.fixture(scope="module")
-def yoloe_adapter():
+def rugd_adapter():
     if not _IR.is_file():
-        pytest.skip("YOLOE-26s IR missing")
-    prompts = load_prompts(
-        _ROOT / "config" / "perception" / "yoloe_prompts.yaml",
-        _ROOT / "config" / "ontologies" / "yoloe.yaml",
-    )
-    cfg = load_adapter_config(_ROOT / "config" / "adapters" / "yoloe.yaml")
+        pytest.skip("RUGD SegFormer IR missing")
     try:
-        backend = build_backend(cfg["backend"], str(_ROOT / cfg["weights"]), prompts)
+        return build_live_adapter(_ROOT)
     except Exception as exc:
         pytest.skip(f"OpenVINO GPU compile unavailable: {exc}")
-    return YoloeAdapter(backend, prompts)
 
 
 def _stamp_msg(ns: int) -> Time:
@@ -163,11 +155,11 @@ def _assert_mask_contract(mask: Image, conf: Image | None) -> None:
     assert float(c.max()) <= 1.0
 
 
-def test_eval2_fresh_photo_to_port(yoloe_adapter) -> None:
+def test_eval2_fresh_photo_to_port(rugd_adapter) -> None:
     rgb = _load_rgb()
     hw = (int(rgb.shape[0]), int(rgb.shape[1]))
     node, masks, confs, cinfos, flags = _run(
-        yoloe_adapter, _image(rgb), _info(hw=hw)
+        rugd_adapter, _image(rgb), _info(hw=hw)
     )
     assert masks, "fresh frame must publish a {0,1,2} mask"
     _assert_mask_contract(masks[0], confs[0] if confs else None)
@@ -178,11 +170,11 @@ def test_eval2_fresh_photo_to_port(yoloe_adapter) -> None:
     assert False in flags
 
 
-def test_eval2_fresh_photo_classes_are_canonical(yoloe_adapter) -> None:
+def test_eval2_fresh_photo_classes_are_canonical(rugd_adapter) -> None:
     rgb = _load_rgb()
     hw = (int(rgb.shape[0]), int(rgb.shape[1]))
     _node, masks, confs, _cinfos, flags = _run(
-        yoloe_adapter, _image(rgb), _info(hw=hw)
+        rugd_adapter, _image(rgb), _info(hw=hw)
     )
     assert masks, "fresh frame must publish a {0,1,2} mask"
     _assert_mask_contract(masks[0], confs[0] if confs else None)
@@ -191,11 +183,11 @@ def test_eval2_fresh_photo_classes_are_canonical(yoloe_adapter) -> None:
     assert set(int(x) for x in np.unique(pix).tolist()) <= CANONICAL
 
 
-def test_eval2_stale_stamp_no_mask(yoloe_adapter) -> None:
+def test_eval2_stale_stamp_no_mask(rugd_adapter) -> None:
     rgb = _load_rgb()
     hw = (int(rgb.shape[0]), int(rgb.shape[1]))
     _node, masks, confs, _cinfos, flags = _run(
-        yoloe_adapter,
+        rugd_adapter,
         _image(rgb),
         _info(hw=hw),
         now_ns=_STAMP + 600_000_000,
@@ -205,23 +197,23 @@ def test_eval2_stale_stamp_no_mask(yoloe_adapter) -> None:
     assert confs == []
 
 
-def test_eval2_identity_k_degrades(yoloe_adapter) -> None:
+def test_eval2_identity_k_degrades(rugd_adapter) -> None:
     rgb = _load_rgb()
     hw = (int(rgb.shape[0]), int(rgb.shape[1]))
     identity = (1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0)
     _node, masks, confs, _cinfos, flags = _run(
-        yoloe_adapter, _image(rgb), _info(k=identity, hw=hw)
+        rugd_adapter, _image(rgb), _info(k=identity, hw=hw)
     )
     assert True in flags
     assert masks == []
     assert confs == []
 
 
-def test_eval2_frame_id_mismatch_degrades(yoloe_adapter) -> None:
+def test_eval2_frame_id_mismatch_degrades(rugd_adapter) -> None:
     rgb = _load_rgb()
     hw = (int(rgb.shape[0]), int(rgb.shape[1]))
     _node, masks, confs, _cinfos, flags = _run(
-        yoloe_adapter,
+        rugd_adapter,
         _image(rgb, frame_id="camera_optical"),
         _info(frame_id="other_optical", hw=hw),
     )
@@ -230,10 +222,10 @@ def test_eval2_frame_id_mismatch_degrades(yoloe_adapter) -> None:
     assert confs == []
 
 
-def test_eval2_starve_watchdog_without_images(yoloe_adapter) -> None:
+def test_eval2_starve_watchdog_without_images(rugd_adapter) -> None:
     rclpy.init()
     node = PerceptionAdapterNode(
-        adapter=yoloe_adapter, now_ns_fn=lambda: _NOW
+        adapter=rugd_adapter, now_ns_fn=lambda: _NOW
     )
     helper = Node("eval2_starve")
     flags: list[bool] = []
@@ -261,11 +253,11 @@ def test_eval2_starve_watchdog_without_images(yoloe_adapter) -> None:
             rclpy.shutdown()
 
 
-def test_eval2_confidence_present_iff_mask(yoloe_adapter) -> None:
+def test_eval2_confidence_present_iff_mask(rugd_adapter) -> None:
     rgb = _load_rgb()
     hw = (int(rgb.shape[0]), int(rgb.shape[1]))
     _node, masks, confs, _cinfos, flags = _run(
-        yoloe_adapter, _image(rgb), _info(hw=hw)
+        rugd_adapter, _image(rgb), _info(hw=hw)
     )
     assert masks, "fresh frame must publish a mask and its confidence"
     assert confs

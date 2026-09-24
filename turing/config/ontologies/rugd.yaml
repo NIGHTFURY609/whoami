@@ -1,0 +1,28 @@
+adapter_id: rugd
+map:
+  void: 0
+  dirt: 1
+  sand: 1
+  grass: 1
+  tree: 2
+  pole: 2
+  water: 2
+  sky: 0
+  vehicle: 2
+  container/generic-object: 2
+  asphalt: 1
+  gravel: 1
+  building: 2
+  mulch: 1
+  rock-bed: 2
+  log: 2
+  bicycle: 2
+  person: 2
+  fence: 2
+  bush: 2
+  sign: 2
+  rock: 2
+  bridge: 2
+  concrete: 1
+  picnic-table: 2
+default: 0

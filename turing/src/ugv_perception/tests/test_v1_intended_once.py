@@ -1,4 +1,4 @@
-"""One eval of the intended Dev 1 path: Image+CameraInfo → YOLOE GPU → port.
+"""One eval of the intended Dev 1 path: Image+CameraInfo → RUGD SegFormer GPU → port.
 
 Not outdoor. Not live_cam. Not DummySource.
 """
@@ -11,15 +11,13 @@ import numpy as np
 import pytest
 
 from ugv_perception.adapter.frame import ImageFrame
-from ugv_perception.adapter.prompts import load_prompts
-from ugv_perception.adapter.yoloe import YoloeAdapter, load_adapter_config
-from ugv_perception.backend.factory import build_backend
+from ugv_perception.backend.rugd_live import build_live_adapter
 from ugv_perception.compose import compose_tick, load_compose_configs
 from ugv_perception.node.wire import wire_compose_out
 from ugv_perception.port.ids import CANONICAL, CONF_ENCODING, MASK_ENCODING
 
 _ROOT = Path(__file__).resolve().parents[3]
-_IR = _ROOT / "weights" / "yoloe-26s-seg.xml"
+_IR = _ROOT / "weights" / "rugd-segformer.xml"
 _PHOTO = _ROOT / "thetestimage1.jpg"
 _NS = 1_000_000_000
 _STAMP = 2_000_000_000
@@ -83,20 +81,14 @@ def _assert_wire(wired) -> None:
 
 def test_v1_intended_path_at_once() -> None:
     if not _IR.is_file():
-        pytest.skip("YOLOE-26s IR missing")
-    prompts = load_prompts(
-        _ROOT / "config" / "perception" / "yoloe_prompts.yaml",
-        _ROOT / "config" / "ontologies" / "yoloe.yaml",
-    )
-    cfg = load_adapter_config(_ROOT / "config" / "adapters" / "yoloe.yaml")
+        pytest.skip("RUGD SegFormer IR missing")
     try:
-        backend = build_backend(cfg["backend"], str(_ROOT / cfg["weights"]), prompts)
+        adapter = build_live_adapter(_ROOT)
     except Exception as exc:
         pytest.skip(f"OpenVINO GPU compile unavailable: {exc}")
-    adapter = YoloeAdapter(backend, prompts)
     table, gates, fresh = load_compose_configs(
-        remap_path=_ROOT / "config" / "ontologies" / "yoloe.yaml",
-        gates_path=_ROOT / "config" / "perception" / "yoloe.yaml",
+        remap_path=_ROOT / "config" / "ontologies" / "rugd.yaml",
+        gates_path=_ROOT / "config" / "perception" / "rugd.yaml",
         freshness_path=_ROOT / "config" / "perception" / "port.yaml",
     )
     rgb = _load_rgb()

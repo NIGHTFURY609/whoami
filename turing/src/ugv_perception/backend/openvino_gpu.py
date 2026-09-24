@@ -296,3 +296,42 @@ def _masks_from_proto(
     if np.any(~np.isfinite(masks)) or np.any(masks < 0.0) or np.any(masks > 1.0):
         raise AdapterError("YOLO-seg masks are not finite and in [0,1]; no clip")
     return masks
+
+
+class OpenVinoGpuTensorBackend:
+    """Compile an IR on GPU and return the first output tensor. No YOLO decode."""
+
+    id = "openvino_gpu"
+
+    def __init__(self) -> None:
+        self._compiled = None
+
+    def load(self, weights_path: str) -> None:
+        path = Path(weights_path)
+        if not path.is_file():
+            raise FileNotFoundError(f"OpenVINO IR missing: {path}")
+        try:
+            import openvino as ov
+        except ImportError as exc:
+            raise AdapterError("openvino is not installed") from exc
+        core = ov.Core()
+        devices = list(core.available_devices)
+        if not any(str(d).startswith(_DEVICE) for d in devices):
+            raise AdapterError(f"OpenVINO {_DEVICE} not available; devices={devices}")
+        try:
+            model = core.read_model(str(path))
+            self._compiled = core.compile_model(model, _DEVICE)
+        except Exception as exc:
+            raise AdapterError(f"OpenVINO compile on {_DEVICE} failed") from exc
+
+    def run(self, blob: NDArray[np.float32]) -> np.ndarray:
+        if self._compiled is None:
+            raise AdapterError("OpenVinoGpuTensorBackend.load() was not called")
+        if not isinstance(blob, np.ndarray) or blob.dtype != np.float32 or blob.ndim != 4:
+            raise TypeError("blob must be float32 NCHW")
+        try:
+            result = self._compiled([blob])
+            out = np.asarray(result[self._compiled.output(0)])
+        except Exception as exc:
+            raise AdapterError("OpenVINO GPU run failed") from exc
+        return out
