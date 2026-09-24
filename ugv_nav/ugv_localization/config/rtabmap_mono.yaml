@@ -1,0 +1,46 @@
+# RTAB-Map — MONO camera + external wheel odometry (mindmap D2, D5).
+# Mode params (Mem/IncrementalMemory, Mem/InitWMWithAllNodes) are NOT here: they come from
+# ugv_localization.modes.plan_mode (single source of truth), passed by localization.launch.py.
+#
+# Parameter NAMES verified against rtabmap_ros 0.23.7 / Lyrical (2026-09-24, check_rtabmap_params: all known).
+# VALUES are untuned until the Dev 5 sim camera runs. Re-check after any rtabmap upgrade:
+#   ros2 run rtabmap_slam rtabmap --params > /tmp/p.txt
+#   ros2 run ugv_localization check_rtabmap_params --dump /tmp/p.txt
+# Library params (Group/Name) MUST be quoted strings (rtabmap_ros declares them as strings).
+/**:
+  ros__parameters:
+    # ---- ROS node params ------------------------------------------------------------
+    frame_id: base_link
+    map_frame_id: map
+    publish_tf: true            # map->odom (Dev 2 owns the whole chain, mindmap D6)
+    tf_delay: 0.05              # 20 Hz map->odom  (contract: >= 15 Hz)
+    tf_tolerance: 0.1
+    wait_for_transform: 0.2
+    subscribe_rgb: true         # mono: RGB only
+    subscribe_depth: false
+    subscribe_rgbd: false
+    subscribe_stereo: false
+    subscribe_scan: false
+    subscribe_odom_info: false  # external wheel odom has no OdomInfo
+    approx_sync: true           # image vs odom stamps differ
+    sync_queue_size: 30         # VERIFY name (older releases: queue_size)
+    topic_queue_size: 10        # VERIFY name
+
+    # ---- RTAB-Map library params (strings) -------------------------------------------
+    Reg/Strategy: "0"               # visual registration
+    Reg/Force3DoF: "true"           # ground robot: x, y, yaw only
+    Kp/DetectorStrategy: "6"        # GFTT/BRIEF for bag-of-words loop closure
+    Vis/FeatureType: "6"            # GFTT/BRIEF for transform estimation
+    Kp/MaxFeatures: "500"
+    Vis/MaxFeatures: "1000"
+    Vis/MinInliers: "20"
+    Vis/EstimationType: "1"         # 3D->2D PnP; 3D words come from motion triangulation below
+    Mem/StereoFromMotion: "true"    # VERIFY: triangulate mono features using odometry motion
+    Rtabmap/DetectionRate: "2"      # Hz; pose_validity slam_max_age_s must exceed 1/rate
+    RGBD/LinearUpdate: "0.1"        # m between graph nodes
+    RGBD/AngularUpdate: "0.1"       # rad between graph nodes
+    RGBD/ProximityBySpace: "true"   # local loop closures (key to bounding mono drift)
+    RGBD/NeighborLinkRefining: "false"  # needs depth/scan; mono has neither
+    RGBD/OptimizeMaxError: "3.0"    # reject loop closures that tear the graph
+    Optimizer/Strategy: "1"         # g2o (VERIFY available in the build; else 0 = TORO)
+    Grid/Sensor: "0"                # VERIFY (older: Grid/FromDepth). No depth → no occupancy /map

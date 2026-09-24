@@ -1,0 +1,29 @@
+# /ugv/pose_valid policy (architecture §10.1, §12). Starting values, NOT architecture — tune in sim.
+# Every threshold is a float on purpose (0.5, not 1): intent must be explicit.
+
+# Freshness (now - stamp). dev.md §12 table: localization/TF 0.5 s.
+localization_max_age_s: 0.5   # TF map->base_link
+odom_max_age_s: 0.5           # /odom (gated wheel odom)
+camera_max_age_s: 0.5         # CameraInfo stamp = image stamp proxy for the SLAM camera
+slam_max_age_s: 2.0           # rtabmap/info; published per processed frame (Rtabmap/DetectionRate)
+max_future_s: 0.05            # stamps ahead of our clock are lies
+
+# Covariance bounds on wheel odom pose (§10.1 "not exploded").
+max_xy_variance_m2: 1.0
+max_yaw_variance_rad2: 0.25
+
+# Mono "VO-lost" equivalent (mindmap gap note): dead-reckoning since the last visual constraint.
+max_dead_reckon_m: 8.0        # path length on wheel odom since last loop closure / proximity match
+max_dead_reckon_s: 0.0        # 0.0 = disabled
+dead_reckon_in_mapping: false # while mapping, the map itself is being built from odom
+
+# map->odom correction jumps after the first relocalization → brief hold.
+max_correction_jump_m: 1.0
+max_correction_jump_rad: 0.35
+correction_jump_hold_s: 1.0
+
+# Hysteresis: all checks must pass continuously this long before valid=true again.
+recover_hold_s: 1.0
+
+# /ugv/pose_valid is published at this rate ALWAYS (heartbeat for Dev 5 watchdog).
+publish_rate_hz: 20.0

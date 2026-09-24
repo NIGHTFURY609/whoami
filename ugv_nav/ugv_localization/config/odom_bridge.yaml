@@ -1,0 +1,6 @@
+# odom_tf_bridge gate profile (Dev 2). Starting values, not architecture.
+# Input: Dev 5 /wheel/odom (nav_msgs/Odometry, frame odom -> child base_link, NO TF from Dev 5).
+odom_frame: odom
+base_frame: base_link
+max_future_s: 0.05     # stamps ahead of our clock by more than this are lies
+quat_norm_tol: 0.01    # renormalize within tolerance; reject beyond
