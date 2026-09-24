@@ -1,0 +1,13 @@
+adapter_id: ganav
+backend: openvino_gpu
+weights: weights/ganav-rugd-group6.xml
+# Copied from trained_models/rugd_group6/ganav_rugd_6.py test pipeline.
+# mmseg img_scale / Pad size are (width, height).
+img_scale_wh: [300, 375]
+pad_wh: [300, 375]
+keep_ratio: true
+to_rgb: true
+align_corners: false
+mean: [123.675, 116.28, 103.53]
+std: [58.395, 57.12, 57.375]
+groups: [background, smooth, rough, bumpy, water, obstacle]

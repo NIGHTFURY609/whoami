@@ -1,0 +1,9 @@
+adapter_id: ganav
+map:
+  background: 0
+  smooth: 1
+  rough: 1
+  bumpy: 2
+  water: 2
+  obstacle: 2
+default: 0

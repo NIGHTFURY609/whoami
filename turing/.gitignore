@@ -13,3 +13,5 @@ weights/*.xml
 weights/*.bin
 weights/*.engine
 weights/*.safetensors
+weights/rugd-segformer/
+weights/ganav_drive/
