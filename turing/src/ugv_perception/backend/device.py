@@ -28,6 +28,27 @@ def cuda_available() -> bool:
         return False
 
 
+def is_gpu_device(device: object) -> bool:
+    """True for Intel OpenVINO GPU* and NVIDIA CUDA. CPU stays off this path."""
+    name = str(device or "").strip().upper()
+    if name.startswith("CPU"):
+        return False
+    return name.startswith("GPU") or name.startswith("CUDA") or name.startswith("NVIDIA")
+
+
+def can_overlap_gpu(adapter: object, depth: object) -> bool:
+    """Overlap RUGD and DA3 only when both compiled devices are GPUs."""
+    if depth is None:
+        return False
+    mask_backend = getattr(getattr(adapter, "_inner", adapter), "_backend", None)
+    depth_backend = getattr(depth, "_backend", None)
+    if mask_backend is None or depth_backend is None:
+        return False
+    return is_gpu_device(getattr(mask_backend, "device", "")) and is_gpu_device(
+        getattr(depth_backend, "device", "")
+    )
+
+
 def _load_openvino_ir(xml: Path) -> object:
     from ugv_perception.backend.openvino_gpu import OpenVinoGpuTensorBackend
 

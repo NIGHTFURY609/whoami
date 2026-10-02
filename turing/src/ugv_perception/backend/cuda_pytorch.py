@@ -33,6 +33,7 @@ class CudaPytorchTensorBackend:
         self.seg_post_disabled = False
         self.rgb_pre_disabled = False
         self.device = "cuda"
+        self._stream = None
 
     def load(self, weights_path: str, kind: str = "rugd") -> None:
         path = Path(weights_path)
@@ -59,6 +60,12 @@ class CudaPytorchTensorBackend:
             raise AdapterError("CUDA load failed") from exc
         self._kind = kind
         self.device = "cuda"
+        try:
+            import torch
+
+            self._stream = torch.cuda.Stream()
+        except Exception:
+            self._stream = None
 
     def ensure_hw(self, height: int, width: int) -> None:
         if self._model is None:
@@ -113,7 +120,8 @@ class CudaPytorchTensorBackend:
             import torch
         except ImportError as exc:
             raise AdapterError("torch is not installed") from exc
-        return torch.from_numpy(blob).to("cuda")
+        with self._cuda_stream():
+            return torch.from_numpy(blob).to("cuda")
 
     def _rgb_pre_cuda(
         self,
@@ -137,20 +145,25 @@ class CudaPytorchTensorBackend:
         except ImportError as exc:
             raise AdapterError("torch is not installed") from exc
         try:
-            tensor = torch.from_numpy(np.ascontiguousarray(rgb)).to("cuda")
-            tensor = tensor.permute(2, 0, 1).unsqueeze(0).to(dtype=torch.float32)
-            with torch.inference_mode():
-                for oh, ow in sizes:
-                    th, tw = int(oh), int(ow)
-                    if (int(tensor.shape[-2]), int(tensor.shape[-1])) != (th, tw):
-                        tensor = F.interpolate(
-                            tensor, size=(th, tw), mode="bilinear", align_corners=False
-                        )
-                        if clip_255:
-                            tensor = tensor.clamp(0.0, 255.0)
-                mean_t = torch.tensor(mean, dtype=torch.float32, device="cuda").view(1, 3, 1, 1)
-                std_t = torch.tensor(std, dtype=torch.float32, device="cuda").view(1, 3, 1, 1)
-                return (tensor / 255.0 - mean_t) / std_t
+            with self._cuda_stream():
+                tensor = torch.from_numpy(np.ascontiguousarray(rgb)).to("cuda")
+                tensor = tensor.permute(2, 0, 1).unsqueeze(0).to(dtype=torch.float32)
+                with torch.inference_mode():
+                    for oh, ow in sizes:
+                        th, tw = int(oh), int(ow)
+                        if (int(tensor.shape[-2]), int(tensor.shape[-1])) != (th, tw):
+                            tensor = F.interpolate(
+                                tensor, size=(th, tw), mode="bilinear", align_corners=False
+                            )
+                            if clip_255:
+                                tensor = tensor.clamp(0.0, 255.0)
+                    mean_t = torch.tensor(mean, dtype=torch.float32, device="cuda").view(
+                        1, 3, 1, 1
+                    )
+                    std_t = torch.tensor(std, dtype=torch.float32, device="cuda").view(
+                        1, 3, 1, 1
+                    )
+                    return (tensor / 255.0 - mean_t) / std_t
         except AdapterError:
             self.rgb_pre_disabled = True
             raise
@@ -171,7 +184,7 @@ class CudaPytorchTensorBackend:
             raise AdapterError("torch is not installed") from exc
         logits = None
         try:
-            with torch.inference_mode():
+            with self._cuda_stream(), torch.inference_mode():
                 logits = self._model(pixel_values=tensor).logits
                 if not torch.isfinite(logits).all():
                     raise AdapterError("RUGD logits are not finite")
@@ -204,7 +217,7 @@ class CudaPytorchTensorBackend:
         except ImportError as exc:
             raise AdapterError("torch is not installed") from exc
         try:
-            with torch.inference_mode():
+            with self._cuda_stream(), torch.inference_mode():
                 if self._kind == "rugd":
                     logits = self._model(pixel_values=tensor).logits
                     return [logits.detach().cpu().numpy()]
@@ -217,6 +230,13 @@ class CudaPytorchTensorBackend:
             raise
         except Exception as exc:
             raise AdapterError("CUDA run failed") from exc
+
+    def _cuda_stream(self) -> object:
+        import torch
+
+        if self._stream is None:
+            return torch.cuda.stream(torch.cuda.default_stream())
+        return torch.cuda.stream(self._stream)
 
 
 def _load_rugd(path: Path) -> object:

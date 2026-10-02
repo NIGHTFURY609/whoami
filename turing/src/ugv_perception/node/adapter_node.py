@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import rclpy
@@ -12,6 +13,7 @@ from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPo
 from sensor_msgs.msg import CameraInfo, Image
 from std_msgs.msg import Bool, Float64MultiArray
 
+from ugv_perception.backend.device import can_overlap_gpu
 from ugv_perception.compose.load import load_compose_configs
 from ugv_perception.ingest.msgs import CameraInfoView, ImageView
 from ugv_perception.ingest.ros_bridge import camera_info_msg_to_view, image_msg_to_view
@@ -125,6 +127,7 @@ class PerceptionAdapterNode(Node):
         self._pub_meta = self.create_publisher(Float64MultiArray, "/segmentation/port_meta", 10)
         self._pub_cinfo = self.create_publisher(CameraInfo, "/segmentation/camera_info", 10)
         self._depth = depth
+        self._depth_pool: ThreadPoolExecutor | None = None
         self._pub_cloud = None
         self._pub_depth = None
         if depth is not None:
@@ -143,6 +146,10 @@ class PerceptionAdapterNode(Node):
 
     def destroy_node(self) -> None:
         self._stop.set()
+        pool = getattr(self, "_depth_pool", None)
+        if pool is not None:
+            pool.shutdown(wait=False, cancel_futures=True)
+            self._depth_pool = None
         wd = getattr(self, "_watchdog", None)
         if wd is not None and wd.is_alive():
             wd.join(timeout=2.0)
@@ -168,10 +175,19 @@ class PerceptionAdapterNode(Node):
         now_ns = self._now_ns_fn()
         if type(now_ns) is not int or now_ns <= 0:
             raise TypeError("now_ns must be a Python int > 0")
-        had_pair = self._last_image is not None and self._last_info is not None
+        image = self._last_image
+        info = self._last_info
+        had_pair = image is not None and info is not None
+        depth_fut = None
+        if had_pair and can_overlap_gpu(self._adapter, self._depth):
+            if self._depth_pool is None:
+                self._depth_pool = ThreadPoolExecutor(
+                    max_workers=1, thread_name_prefix="ugv_da3"
+                )
+            depth_fut = self._depth_pool.submit(self._depth_maps, image, info)
         out = perception_cycle(
-            image=self._last_image,
-            camera_info=self._last_info,
+            image=image,
+            camera_info=info,
             now_ns=now_ns,
             adapter=self._adapter,
             remap_table=self._table,
@@ -196,12 +212,44 @@ class PerceptionAdapterNode(Node):
             self._pub_meta.publish(wired.port_meta)
             if self._last_camera_info_msg is not None:
                 self._pub_cinfo.publish(self._last_camera_info_msg)
-            self._publish_depth()
-        if had_pair and self._last_image is not None:
-            self._inferred_stamp = self._last_image.stamp_ns
+            if depth_fut is not None:
+                self._emit_depth(depth_fut)
+            else:
+                self._publish_depth()
+        elif depth_fut is not None:
+            try:
+                depth_fut.result()
+            except Exception:
+                pass
+        if had_pair and image is not None:
+            self._inferred_stamp = image.stamp_ns
+
+    def _depth_maps(
+        self, image: ImageView, info: CameraInfoView
+    ) -> tuple[tuple[object, object], int, str]:
+        from ugv_perception.ingest.decode import decode_frame
+
+        frame = decode_frame(image, info)
+        return self._depth.maps(frame.rgb, info.k), frame.stamp_ns, frame.frame_id
+
+    def _emit_depth(self, depth_fut: object) -> None:
+        """Wait for overlapped DA3. Failure publishes no cloud and does not touch degraded."""
+        try:
+            (depth_m, points), stamp_ns, frame_id = depth_fut.result()
+        except Exception:
+            return
+        try:
+            from ugv_perception.node.cloud import depth_to_image, points_to_cloud
+
+            if self._pub_depth is not None:
+                self._pub_depth.publish(depth_to_image(depth_m, stamp_ns, frame_id))
+            if points is not None and self._pub_cloud is not None:
+                self._pub_cloud.publish(points_to_cloud(points, stamp_ns, frame_id))
+        except Exception:
+            return
 
     def _publish_depth(self) -> None:
-        """After the mask. Failure publishes no cloud and does not touch degraded."""
+        """Sequential DA3 after the mask. Failure publishes no cloud and does not touch degraded."""
         if self._depth is None or self._last_image is None or self._last_info is None:
             return
         try:
