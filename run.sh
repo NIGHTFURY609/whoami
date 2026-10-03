@@ -5,6 +5,13 @@
 #   bash run.sh
 #
 # Env: CAM_INDEX (DirectShow camera index, default 0).
+#
+#   VIDEO=/n/path/rc_car.mp4 bash run.sh     # a recorded video instead of the webcam (eval only)
+#
+# VIDEO mode env: RC_HFOV (assumed horizontal FOV, deg, default 90), RC_CAM_Z (camera height, m, default 0.10),
+# RC_CAM_PITCH (deg, default 0), VIDEO_SPEED (default 1.0; 0.5 = slow motion), VIDEO_LOOP (any value: rewind at the
+# end). Any resolution works: the video is scaled to 640 wide keeping its aspect, and a placeholder calibration for
+# that size is written to ugv_nav/config/cameras/rc_car_<W>x<H>.yaml. Map database: ~/.ros/ugv/rc_video.db.
 # Ctrl+C stops the UI and the webcam bridge (camera LED off). The ROS stack keeps running in ugv-run and holds
 # (no camera -> zero /cmd_vel); rerunning this script restarts it.
 set -euo pipefail
@@ -52,16 +59,39 @@ docker run -d --name "$FORWARD" -p 9090:9090 alpine/socat \
   tcp-listen:9090,fork,reuseaddr "tcp-connect:$IP:9090" >/dev/null
 echo "$FORWARD -> $IP:9090"
 
-log "Webcam bridge (:8090)"
+STREAM="$REPO/ugv_nav/ugv_bringup/scripts/webcam_stream.py"
 WEBCAM_PID=""
-if netstat -ano | grep -qE '[:.]8090 +[^ ]+ +LISTENING'; then
-  echo "already serving on :8090, reusing it"
-else
-  python "$REPO/ugv_nav/ugv_bringup/scripts/webcam_stream.py" --index "${CAM_INDEX:-0}" \
-    >"$LOGS/webcam.log" 2>&1 &
+ROS_ENV=()  # restart_live.sh overrides; empty = the laptop webcam defaults
+if [ -n "${VIDEO:-}" ]; then
+  log "Video bridge (:8090): $VIDEO (eval only: placeholder calibration, open loop)"
+  [ -f "$VIDEO" ] || { echo "VIDEO=$VIDEO is not a file"; exit 1; }
+  if netstat -ano | grep -qE '[:.]8090 +[^ ]+ +LISTENING'; then
+    echo ":8090 is already serving (the webcam bridge?); stop it first so the driver reads the video"
+    exit 1
+  fi
+  # A placeholder calibration for exactly the size the video is served at (aspect kept, scaled to 640 wide).
+  CAL_TMP="$REPO/ugv_nav/config/cameras/rc_car.tmp.yaml"
+  OUT="$(python "$STREAM" --video "$VIDEO" --calibration-out "$CAL_TMP" --hfov-deg "${RC_HFOV:-90}")"
+  CAL="rc_car_${OUT%% *}.yaml"
+  mv -f "$CAL_TMP" "$REPO/ugv_nav/config/cameras/$CAL"
+  echo "calibration: ugv_nav/config/cameras/$CAL (placeholder, assumed HFOV ${RC_HFOV:-90} deg)"
+  python -u "$STREAM" --video "$VIDEO" ${VIDEO_SPEED:+--speed "$VIDEO_SPEED"} ${VIDEO_LOOP:+--loop} >"$LOGS/webcam.log" 2>&1 &
   WEBCAM_PID=$!
+  ROS_ENV=(-e "UGV_CAL=/repo/ugv_nav/config/cameras/$CAL" -e UGV_ALLOW_PLACEHOLDER=true
+           -e "UGV_CAM_Z=${RC_CAM_Z:-0.10}" -e "UGV_CAM_PITCH=${RC_CAM_PITCH:-0}"
+           -e UGV_DB=/root/.ros/ugv/rc_video.db)
+else
+  log "Webcam bridge (:8090)"
+  if netstat -ano | grep -qE '[:.]8090 +[^ ]+ +LISTENING'; then
+    echo "already serving on :8090, reusing it"
+  else
+    python "$STREAM" --index "${CAM_INDEX:-0}" >"$LOGS/webcam.log" 2>&1 &
+    WEBCAM_PID=$!
+  fi
+fi
+if [ -n "$WEBCAM_PID" ]; then
   sleep 3
-  kill -0 "$WEBCAM_PID" 2>/dev/null || { echo "webcam bridge died:"; cat "$LOGS/webcam.log"; exit 1; }
+  kill -0 "$WEBCAM_PID" 2>/dev/null || { echo "camera bridge died:"; cat "$LOGS/webcam.log"; exit 1; }
   echo "started (log: .logs/webcam.log)"
 fi
 
@@ -71,7 +101,7 @@ cleanup() {
 trap cleanup EXIT
 
 log "ROS stack (sync + colcon build + live_cam launch + rosbridge)"
-MSYS_NO_PATHCONV=1 docker exec "$CONTAINER" bash /ws/restart_live.sh  # keep Git Bash from rewriting /ws/...
+MSYS_NO_PATHCONV=1 docker exec ${ROS_ENV[@]+"${ROS_ENV[@]}"} "$CONTAINER" bash /ws/restart_live.sh  # keep Git Bash from rewriting /ws/...
 
 # First free port from 5173 up, so the summary below shows the exact URL (an older dev server may hold 5173).
 UI_PORT=5173
@@ -82,9 +112,9 @@ printf '  %-22s %s\n' \
   "UI"                    "http://localhost:$UI_PORT  (opens in your browser)" \
   "API gateway"           "http://localhost:8080" \
   "rosbridge (websocket)" "ws://localhost:9090" \
-  "Webcam stream"         "http://localhost:8090/cam.mjpg" \
+  "Camera stream"         "http://localhost:8090/cam.mjpg" \
   "ROS log"               "docker exec $CONTAINER tail -f /tmp/live.log" \
-  "Stop"                  "Ctrl+C (stops UI + webcam; ROS holds in $CONTAINER)"
+  "Stop"                  "Ctrl+C (stops UI + camera bridge; ROS holds in $CONTAINER)"
 
 log "UI dev server"
 cd "$REPO/ui"

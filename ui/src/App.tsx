@@ -1,4 +1,4 @@
-import { Component, lazy, Suspense, useEffect, useState, type ReactNode } from 'react'
+import { Component, lazy, memo, Suspense, useEffect, useRef, useState, type ReactNode } from 'react'
 import { CameraView } from './components/CameraView'
 import { CommandPanel } from './components/CommandPanel'
 import { Inspector } from './components/Inspector'
@@ -6,16 +6,41 @@ import { SafetyBoard } from './components/SafetyBoard'
 import { SourcePanel } from './components/SourcePanel'
 import { StatusWidgets } from './components/StatusWidgets'
 import { TopBar } from './components/TopBar'
+import { VideoPanel } from './components/VideoPanel'
 import {
   parseView, slotOnError, slotOnProps, slotState, type MainView, type SlotFailure, type SlotState,
 } from './map/mapToggles'
 import { ApiError, api, isLive, subscribeTelemetry, type Mode, type Telemetry } from './source/api'
 import { noteRobotPose, useCameraSource } from './source/useCameraSource'
+import { useRecordedPlayback } from './source/recording'
+import { useVideoBridge, videoBridgeUrl } from './source/videobridge'
 
 const CLOCK_MS = 250 // re-check telemetry freshness at 4 Hz so a dead stream reads NO SIGNAL promptly
 
 // three.js is large, so the map view is its own lazily loaded chunk: the camera view's first paint does not pay for it.
 const MapView = lazy(() => import('./components/MapView').then((m) => ({ default: m.MapView })))
+
+// Panels whose props only change with telemetry: kept out of the per-frame re-render of a playing video.
+const TopBarM = memo(TopBar)
+const SafetyBoardM = memo(SafetyBoard)
+const StatusWidgetsM = memo(StatusWidgets)
+const InspectorM = memo(Inspector)
+
+// The latest value (by identity), at most every `ms`: the Inspector's widgets cost a full re-render each, so a 30 fps recorded video
+// updates them a few times a second (the live robot camera arrives at about that rate anyway).
+function useThrottled<T>(value: T, ms: number): T {
+  const [shown, setShown] = useState(value)
+  const last = useRef(0)
+  useEffect(() => {
+    const wait = last.current + ms - performance.now()
+    const t = window.setTimeout(() => {
+      last.current = performance.now()
+      setShown(value)
+    }, Math.max(0, wait))
+    return () => window.clearTimeout(t)
+  }, [value, ms])
+  return shown
+}
 
 const VIEWS: MainView[] = ['camera', 'map']
 const VIEW_KEY = 'ugv.console.view'
@@ -74,6 +99,25 @@ export default function App() {
   const [view, setView] = useState<MainView>(savedView)
   const [viewAttempt, setViewAttempt] = useState(0) // bumped by "try again" after a failed view
   const cam = useCameraSource()
+  const inspectedAnalysis = useThrottled(cam.analysis, 200)
+  const inspectedFreshness = useThrottled(cam.freshness, 200)
+  // A replayed video in sync mode: show each robot frame together with its own overlay.
+  const video = useVideoBridge()
+  const pair = !!video.status?.sync && !!video.status.perception
+  const { setPairFrames } = cam
+  useEffect(() => setPairFrames(pair), [pair, setPairFrames])
+  // ...and its saved overlays, played back without the stack.
+  const recorded = useRecordedPlayback(videoBridgeUrl(), video.status?.cache ?? null, video.status?.fps ?? 30, cam.showRecorded)
+  const playLive = () => {
+    recorded.pause()
+    if (cam.source !== 'ros2') cam.pickSource('ros2')
+    void video.send('play')
+  }
+  const playRecorded = () => {
+    if (video.status?.state === 'playing' || video.status?.state === 'buffering') void video.send('pause')
+    if (cam.source !== 'recording') cam.pickSource('recording')
+    recorded.play()
+  }
   // The map view's image panels show the robot camera only (not the browser camera or an upload), and its depth only
   // while that analysis is current: one feed for both views, nothing fetched twice.
   const onRobot = cam.source === 'ros2'
@@ -150,7 +194,7 @@ export default function App() {
 
   return (
     <div className="app">
-      <TopBar connected={connected} live={live} safetyOk={safety?.ok ?? null} />
+      <TopBarM connected={connected} live={live} safetyOk={safety?.ok ?? null} />
       <nav className="viewswitch" aria-label="Main view">
         {VIEWS.map((v) => (
           <button key={v} type="button" className={view === v ? 'on' : ''} aria-pressed={view === v} onClick={() => pickView(v)}>
@@ -173,6 +217,16 @@ export default function App() {
           message={message}
         />
         <SourcePanel cam={cam} />
+        {video.status && (
+          <VideoPanel
+            status={video.status}
+            error={video.error}
+            onCommand={(c) => void video.send(c)}
+            recorded={recorded}
+            onPlayLive={playLive}
+            onPlayRecorded={playRecorded}
+          />
+        )}
       </aside>
       <ViewBoundary resetKey={`${view}:${viewAttempt}`} fallback={viewFailed}>
         {view === 'camera' ? (
@@ -184,9 +238,9 @@ export default function App() {
         )}
       </ViewBoundary>
       <aside className="panel inspector">
-        <SafetyBoard safety={safety} live={live} />
+        <SafetyBoardM safety={safety} live={live} />
         <p className="inspector-hint">drag widgets to rearrange · alt + arrows on keyboard</p>
-        <StatusWidgets
+        <StatusWidgetsM
           live={live}
           command={telemetry?.command}
           navigation={telemetry?.navigation}
@@ -194,7 +248,7 @@ export default function App() {
           eStop={safety?.eStop}
           map={telemetry?.map}
         />
-        <Inspector analysis={cam.analysis} freshness={cam.freshness} />
+        <InspectorM analysis={inspectedAnalysis} freshness={inspectedFreshness} />
       </aside>
     </div>
   )

@@ -61,7 +61,7 @@ every 10 s while it changes.
   `fps` timer, and if that is slower than the stream, frames are superseded in steady state and `dropped` stops
   being a clean indicator of a stall followed by a burst.
 - A video file given as `device` is not paced: it is drained at decode speed and only the newest frames are
-  published. Use a bag for replay.
+  published. To replay a recording, serve it as a stream instead ("Replaying a recorded video" below).
 - A tunnel that stalls without erroring leaves a blocked read that counts no failure. The driver therefore
   watches the time since the last frame: after more than 2 s it logs a WARN `no new frame for N s` every 10 s
   while it lasts (saying whether the read is blocked or failing, and why), and an INFO when frames resume. After
@@ -119,5 +119,40 @@ Docker on Windows cannot open a USB webcam, so the host serves it and the driver
    docker run -it --gpus all -p 8080:8080 -v <repo>:/repo        -v /run/desktop/mnt/host/wslg/.X11-unix:/tmp/.X11-unix -e DISPLAY=:0 ugv-live
    ```
    then build the workspace from `/repo` and use `device:=http://host.docker.internal:8090/cam.mjpg`.
+
+## Replaying a recorded video (eval only)
+
+A video from another camera (an RC car's, say) goes through the same path as the webcam. `webcam_stream.py --video`
+serves the file on `:8090` paced at its own frame rate, and the driver reads it like a live camera. From Git Bash on
+the laptop:
+
+```
+VIDEO=/n/path/to/rc_car.mp4 bash run.sh
+```
+
+- Any resolution: the video keeps its aspect ratio and full field of view and is scaled to 640 wide (1920x1080
+  becomes 640x360). `--calibration-out` writes a `placeholder: true` calibration for exactly that size to
+  `config/cameras/rc_car_<W>x<H>.yaml`, from an assumed horizontal FOV (`RC_HFOV`, default 90 deg). No distortion is
+  modelled. Depth and map scale are off by the FOV error: open loop only, never a run that counts.
+- The mount is assumed, not measured: `RC_CAM_Z` (m, default 0.10) and `RC_CAM_PITCH` (deg, default 0). The map goes
+  to `~/.ros/ugv/rc_video.db`, so the laptop map is left alone.
+- The video waits at frame 0 until you press **PLAY** in the UI's **Video replay** panel, so the stack can come up
+  first. Pause and replay are in the same panel.
+- **Wait for perception** (on by default): each frame is sent only after Dev 1's mask for the previous one is back, so
+  every frame is analysed and the camera view shows each frame with its own overlay ("buffering"; playback slows to
+  the perception rate, about 4 frames/s on the laptop). Off: real time, like a live camera.
+- **Recorded overlays:** during a play with "wait for perception" on, every frame's JPEG, mask and depth are saved in
+  `<video stem>.overlays/` beside the video (masks are matched to frames by image stamp, with the container's clock
+  offset measured through rosapi). **PLAY RECORDED** then shows the video with those overlays at its own speed,
+  without the stack, as often as wanted. A later play only fills frames still missing; **DELETE RECORDING** starts
+  over (do that after changing the model or its configuration).
+- `VIDEO_SPEED=0.5` plays in slow motion if visual odometry loses a fast car (stamps are arrival times, so it just
+  looks like a slower car). Paused, ready or ended, the frame on screen is sent again every 2 s: OpenCV drops a
+  network stream that is silent for about 30 s and the driver never gets it back. `VIDEO_LOOP=1` rewinds at the end
+  instead, which visual odometry sees as a teleport.
+- Restarting the video bridge cuts the camera driver's stream for good: restart the stack after it (`bash run.sh`
+  does both).
+- Nothing moves: the arbiter keeps `/cmd_vel` at zero. Running `bash run.sh` without `VIDEO` goes back to the webcam
+  and its calibration.
 
 Not covered here: motor driver, wheel odometry, Gazebo `sim` profile.
