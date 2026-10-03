@@ -76,7 +76,7 @@ Baylands / RUGD / tutorial ONNX = eval/scaffold only.
   ┌────────────────────┐                │
   │ Nav2 costmaps      │◄───────────────┘
   │ SemanticLayer +    │
-  │ optional VoxelLayer│◄── optional Depth Anything 3 Metric Large (geometry)
+  │ optional VoxelLayer│◄── Depth Anything 3 Metric Large (geometry; also feeds RTAB-Map depth, §10)
   └─────────┬──────────┘
             ▼
   ┌────────────────────┐
@@ -93,13 +93,13 @@ Baylands / RUGD / tutorial ONNX = eval/scaffold only.
 | Layer | Choice | Notes |
 |---|---|---|
 | Middleware | ROS 2 Lyrical | |
-| Vision recommended / minimum | Stereo·RGB-D / mono | §10 |
+| Vision recommended / minimum | Stereo·RGB-D / mono | §10. Current hardware: mono + DA3 pseudo-depth (still the minimum tier: drift docs + VO-lost hold) |
 | **Brain** | RTAB-Map + Nav2 (Smac2D + RPP) | |
 | **Perception Port** | Canonical mask + conf + freshness + frame | §8 |
 | Adapter default outdoor | RUGD SegFormer-B5 | Intel: OpenVINO GPU, CPU fallback. NVIDIA: CUDA PyTorch (no OpenVINO). 25 RUGD classes remapped to {0,1,2}. YOLOE selectable, not live. |
 | Adapter scaffold | Tutorial ONNX | Eval only. Remapped |
 | **Safety authority** | Priority mux / watchdog | §3.1 · §12 |
-| Optional geometry | Depth Anything 3 Metric Large → VoxelLayer | Geometry side-channel only; conflict rules = §9 (geometry lethal wins; semantic never clears it) |
+| Depth / geometry | Depth Anything 3 Metric Large (Dev 1) → RTAB-Map RGB-D (**required**); → VoxelLayer (optional) | Publishes a metric point cloud `/perception/depth_cloud`; Dev 2 converts it to a depth image for RTAB-Map. VoxelLayer path is a geometry side-channel only; conflict rules = §9 (geometry lethal wins; semantic never clears it) |
 
 ## 7. Package layout
 ```
@@ -154,13 +154,15 @@ Detailed projection math / multi-camera sync refinements = **deferred** (§14) i
 Stale or adapter failure → `/ugv/perception_degraded` + front ROI lethal/max-inflate + safety hold. Per-pixel gate miss is class `0` on that pixel, not a dropped mask. **Unknown ≠ free** (inflate `0`; never treat it as class `1`).
 
 ## 9. Semantic vs geometry precedence
-Optional Depth Anything 3 Metric Large → VoxelLayer is a **geometry side-channel**, not a second perception port.
+The optional VoxelLayer path from Depth Anything 3 Metric Large is a **geometry side-channel for costmaps**, not a second perception port. The same depth also feeds RTAB-Map (§10).
 
 **Conflict rule:** if geometry says occupied/lethal and semantic says `traversable`, **geometry wins** (lethal stays). Semantic “safe” must **never** clear a geometric obstacle. Semantic hazards may add cost on top of free geometry.
 
 ## 10. Localization & autonomy
 **Sensor honesty:** stereo/RGB-D recommended; mono minimum + drift docs + VO-lost hold.  
 **Modes:** `mapping` (build/save) vs `localize` (load + NavigateToPose).
+
+**Odometry:** wheel (Dev 5) or visual (RTAB-Map `rgbd_odometry` on DA3 depth), selectable; `auto` prefers wheel.
 
 ### 10.1 Pose validity (not only VO-lost)
 Nav2 may use pose only if **valid**:

@@ -18,7 +18,9 @@ _IOU_THRES = 0.70
 _MAX_DET = 300
 
 
-def _compile_gpu_then_cpu(core: object, model: object) -> tuple[object, str]:
+def _compile_gpu_then_cpu(
+    core: object, model: object, config: dict | None = None
+) -> tuple[object, str]:
     """Prefer OpenVINO GPU (Intel Arc or NVIDIA plugin). CPU is last. Compile once."""
     devices = [str(d) for d in core.available_devices]
     names: list[str] = []
@@ -31,7 +33,9 @@ def _compile_gpu_then_cpu(core: object, model: object) -> tuple[object, str]:
     last: Exception | None = None
     for name in names:
         try:
-            return core.compile_model(model, name), name
+            if config is None:
+                return core.compile_model(model, name), name
+            return core.compile_model(model, name, config), name
         except Exception as exc:
             last = exc
             continue
@@ -469,7 +473,13 @@ class OpenVinoGpuTensorBackend:
 
     def _compile(self) -> None:
         try:
-            self._compiled, self.device = _compile_gpu_then_cpu(self._core, self._model)
+            from openvino import Type, properties
+
+            # FP32 on every backend: the GPU plugin would otherwise pick f16 on an f16-capable GPU (Arc) even
+            # for an FP32 IR.
+            self._compiled, self.device = _compile_gpu_then_cpu(
+                self._core, self._model, {properties.hint.inference_precision: Type.f32}
+            )
         except AdapterError:
             raise
         except Exception as exc:

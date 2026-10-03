@@ -83,161 +83,79 @@ def test_adapter_node_spin_fixture_topics() -> None:
             rclpy.shutdown()
 
 
-def test_gpu_overlap_starts_depth_during_mask() -> None:
-    import time
-
+def test_one_decode_per_frame_feeds_segmentation_and_depth(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The cycle decodes the Image once; depth gets that same ImageFrame instead of decoding it again."""
     import numpy as np
-    from sensor_msgs.msg import PointCloud2
 
-    from ugv_perception.adapter.frame import ImageFrame
-    from ugv_perception.adapter.output import ADAPTER_ID, UNLABELED_NAME, RawSemOutput
+    from ugv_perception.node import cycle
 
-    events: list[tuple[str, float]] = []
+    decodes: list[object] = []
+    real_decode = cycle.decode_frame
 
-    class _Backend:
-        device = "GPU"
+    def counting_decode(image, info):
+        frame = real_decode(image, info)
+        decodes.append(frame)
+        return frame
 
-    class _GpuAdapter:
-        _backend = _Backend()
+    monkeypatch.setattr(cycle, "decode_frame", counting_decode)
 
-        def infer(self, frame: ImageFrame) -> RawSemOutput:
-            events.append(("mask_start", time.perf_counter()))
-            time.sleep(0.08)
-            events.append(("mask_end", time.perf_counter()))
-            hw = frame.rgb.shape[:2]
-            return RawSemOutput(
-                adapter_id=ADAPTER_ID,
-                label_ids=np.ones(hw, dtype=np.int32),
-                raw_scores=np.full(hw, 0.9, dtype=np.float32),
-                id_to_name={0: UNLABELED_NAME, 1: "dirt_path"},
-                stamp_ns=frame.stamp_ns,
-                frame_id=frame.frame_id,
-                hw=hw,
-            )
-
-    class _GpuDepth:
-        _backend = _Backend()
+    class _Depth:
+        def __init__(self) -> None:
+            self.rgbs: list[object] = []
 
         def maps(self, rgb, k):
-            events.append(("depth_start", time.perf_counter()))
-            time.sleep(0.08)
-            events.append(("depth_end", time.perf_counter()))
-            h, w = int(rgb.shape[0]), int(rgb.shape[1])
-            return np.ones((h, w), dtype=np.float32), np.zeros((h * w, 3), dtype=np.float32)
+            self.rgbs.append(rgb)
+            return np.full(rgb.shape[:2], 2.0, dtype=np.float32), np.zeros((0, 3), dtype=np.float32)
 
     rclpy.init()
+    spy, depth = SpyAdapter(), _Depth()
     node = PerceptionAdapterNode(
-        adapter=_GpuAdapter(),
-        depth=_GpuDepth(),
-        adapter_id="yoloe",
-        now_ns_fn=lambda: _STAMP + 100_000_000,
+        adapter=spy, adapter_id="yoloe", now_ns_fn=lambda: _STAMP + 100_000_000, depth=depth
     )
-    helper = Node("test_overlap_pub")
-    pub_i = helper.create_publisher(Image, "/camera/image_raw", 10)
-    pub_c = helper.create_publisher(CameraInfo, "/camera/camera_info", camera_info_qos())
-    clouds: list[PointCloud2] = []
-    masks: list[Image] = []
-    helper.create_subscription(PointCloud2, "/perception/depth_cloud", clouds.append, 10)
-    helper.create_subscription(Image, "/segmentation/mask", masks.append, 10)
-    img, info = _msgs()
-    ex = SingleThreadedExecutor()
-    ex.add_node(node)
-    ex.add_node(helper)
     try:
-        for _ in range(80):
-            pub_i.publish(img)
-            pub_c.publish(info)
-            ex.spin_once(timeout_sec=0.05)
-            names = [name for name, _t in events]
-            if "mask_end" in names and "depth_end" in names:
-                for _extra in range(10):
-                    ex.spin_once(timeout_sec=0.05)
-                break
-        names = [name for name, _t in events]
-        assert "mask_start" in names and "depth_start" in names
-        starts = {name: t for name, t in events if name.endswith("_start")}
-        ends = {name: t for name, t in events if name.endswith("_end")}
-        assert starts["depth_start"] < ends["mask_end"]
-        assert clouds
-        assert masks
-        assert clouds[0].header.stamp.sec == masks[0].header.stamp.sec
-        assert clouds[0].header.stamp.nanosec == masks[0].header.stamp.nanosec
-        assert clouds[0].header.frame_id == masks[0].header.frame_id
+        img, info = _msgs()
+        node._on_info(info)
+        node._on_image(img)
+        assert spy.calls == 1 and len(decodes) == 1, "one decode for the whole tick"
+        assert len(depth.rgbs) == 1 and depth.rgbs[0] is decodes[0].rgb, "depth reuses the cycle's frame"
     finally:
-        ex.remove_node(node)
-        ex.remove_node(helper)
         node.destroy_node()
-        helper.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()
 
 
-def test_cpu_backends_stay_sequential() -> None:
-    import time
+def test_depth_failure_is_counted_and_warned_and_leaves_the_mask_alone() -> None:
+    """A DA3 failure publishes no depth but is not silent: counted, logged once, every 100th after.
 
-    import numpy as np
+    perception_degraded stays the segmentation port's flag (§8.4); the hold comes from Dev 2's depth_stale."""
 
-    from ugv_perception.adapter.frame import ImageFrame
-    from ugv_perception.adapter.output import ADAPTER_ID, UNLABELED_NAME, RawSemOutput
+    from ugv_perception.node.cycle import decode_cycle_frame
 
-    events: list[str] = []
-
-    class _Backend:
-        device = "CPU"
-
-    class _CpuAdapter:
-        _backend = _Backend()
-
-        def infer(self, frame: ImageFrame) -> RawSemOutput:
-            events.append("mask_start")
-            time.sleep(0.02)
-            events.append("mask_end")
-            hw = frame.rgb.shape[:2]
-            return RawSemOutput(
-                adapter_id=ADAPTER_ID,
-                label_ids=np.ones(hw, dtype=np.int32),
-                raw_scores=np.full(hw, 0.9, dtype=np.float32),
-                id_to_name={0: UNLABELED_NAME, 1: "dirt_path"},
-                stamp_ns=frame.stamp_ns,
-                frame_id=frame.frame_id,
-                hw=hw,
-            )
-
-    class _CpuDepth:
-        _backend = _Backend()
-
+    class _BrokenDepth:
         def maps(self, rgb, k):
-            events.append("depth_start")
-            h, w = int(rgb.shape[0]), int(rgb.shape[1])
-            events.append("depth_end")
-            return np.ones((h, w), dtype=np.float32), np.zeros((h * w, 3), dtype=np.float32)
+            raise RuntimeError("DA3 exploded")
 
     rclpy.init()
+    spy = SpyAdapter()
     node = PerceptionAdapterNode(
-        adapter=_CpuAdapter(),
-        depth=_CpuDepth(),
-        adapter_id="yoloe",
-        now_ns_fn=lambda: _STAMP + 100_000_000,
+        adapter=spy, adapter_id="yoloe", now_ns_fn=lambda: _STAMP + 100_000_000, depth=_BrokenDepth()
     )
-    helper = Node("test_cpu_seq_pub")
-    pub_i = helper.create_publisher(Image, "/camera/image_raw", 10)
-    pub_c = helper.create_publisher(CameraInfo, "/camera/camera_info", camera_info_qos())
-    img, info = _msgs()
-    ex = SingleThreadedExecutor()
-    ex.add_node(node)
-    ex.add_node(helper)
+    warnings: list[str] = []
+    node.get_logger().warning = lambda msg, **kw: warnings.append(msg)  # type: ignore[method-assign]
     try:
-        for _ in range(80):
-            pub_i.publish(img)
-            pub_c.publish(info)
-            ex.spin_once(timeout_sec=0.05)
-            if "depth_end" in events:
-                break
-        assert events[:4] == ["mask_start", "mask_end", "depth_start", "depth_end"]
+        img, info = _msgs()
+        node._on_info(info)
+        node._on_image(img)
+        assert node.metrics.masks_published == 1, "the mask still goes out"
+        assert node.metrics.depth_errors == 1
+        assert node.metrics.degraded_true == 0, "depth failure does not touch perception_degraded"
+        assert len(warnings) == 1 and "DA3 exploded" in warnings[0]
+        frame = decode_cycle_frame(node._last_image, node._last_info)
+        for _ in range(99):
+            node._publish_depth(frame)
+        assert node.metrics.depth_errors == 100
+        assert len(warnings) == 2, "first failure, then every 100th"
     finally:
-        ex.remove_node(node)
-        ex.remove_node(helper)
         node.destroy_node()
-        helper.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()

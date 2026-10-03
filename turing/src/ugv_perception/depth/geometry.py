@@ -75,26 +75,31 @@ def valid_mask(depth_m: np.ndarray, sky: np.ndarray) -> np.ndarray:
     return np.isfinite(depth_m) & ~hole
 
 
+def half_pixel_positions(n_src: int, n_dst: int) -> np.ndarray:
+    """Source sample position of each of `n_dst` output pixels along one axis: half-pixel centres, edge clamp.
+
+    Float64, in [0, n_src - 1]. The one definition: the GPU twin in geometry_gpu builds its index and
+    weight tables from this, so the two resizes cannot drift apart.
+    """
+    return np.clip((np.arange(n_dst) + 0.5) * n_src / n_dst - 0.5, 0.0, n_src - 1)
+
+
 def _bilinear(src: np.ndarray, out_h: int, out_w: int) -> np.ndarray:
+    """Bilinear resize (half-pixel centres, edge clamp), float64. Separable: rows, then columns."""
     src_f = np.asarray(src, dtype=np.float64)
     mh, mw = src_f.shape
     if (mh, mw) == (out_h, out_w):
         return src_f.copy()
-    ys = np.clip((np.arange(out_h) + 0.5) * mh / out_h - 0.5, 0.0, mh - 1)
-    xs = np.clip((np.arange(out_w) + 0.5) * mw / out_w - 0.5, 0.0, mw - 1)
-    yy, xx = np.meshgrid(ys, xs, indexing="ij")
-    y0 = np.floor(yy).astype(np.intp)
-    x0 = np.floor(xx).astype(np.intp)
+    ys = half_pixel_positions(mh, out_h)
+    xs = half_pixel_positions(mw, out_w)
+    y0 = np.floor(ys).astype(np.intp)
+    x0 = np.floor(xs).astype(np.intp)
     y1 = np.minimum(y0 + 1, mh - 1)
     x1 = np.minimum(x0 + 1, mw - 1)
-    wy = yy - y0
-    wx = xx - x0
-    return (
-        src_f[y0, x0] * (1.0 - wy) * (1.0 - wx)
-        + src_f[y0, x1] * (1.0 - wy) * wx
-        + src_f[y1, x0] * wy * (1.0 - wx)
-        + src_f[y1, x1] * wy * wx
-    )
+    wy = (ys - y0)[:, None]
+    wx = xs - x0
+    rows = src_f[y0, :] * (1.0 - wy) + src_f[y1, :] * wy
+    return rows[:, x0] * (1.0 - wx) + rows[:, x1] * wx
 
 
 def hole_safe_resize(depth_m: np.ndarray, sky: np.ndarray, out_hw: tuple[int, int]) -> np.ndarray:
@@ -125,10 +130,12 @@ def backproject(depth_hw: np.ndarray, k_camera: np.ndarray) -> np.ndarray:
     return np.stack([x, y, z], axis=1).astype(np.float32)
 
 
-MEAN = (0.485, 0.456, 0.406)
-STD = (0.229, 0.224, 0.225)
-_MEAN = np.array(MEAN, dtype=np.float64)
-_STD = np.array(STD, dtype=np.float64)
+# ImageNet normalisation of DA3's input. The one definition: geometry_gpu imports these.
+IMAGENET_MEAN = (0.485, 0.456, 0.406)
+IMAGENET_STD = (0.229, 0.224, 0.225)
+MEAN, STD = IMAGENET_MEAN, IMAGENET_STD  # the names base code (run_*_from_rgb callers) uses
+_MEAN = np.array(IMAGENET_MEAN, dtype=np.float64)
+_STD = np.array(IMAGENET_STD, dtype=np.float64)
 
 
 def _resize_u8(rgb: np.ndarray, dst_hw: tuple[int, int]) -> np.ndarray:

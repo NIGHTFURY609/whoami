@@ -12,4 +12,5 @@ class PerceptionMetrics:
     infer_calls: int = 0
     degraded_true: int = 0
     degraded_false: int = 0
+    depth_errors: int = 0  # depth (DA3) failures: no depth published that frame
     latencies_ns: list[int] = field(default_factory=list)

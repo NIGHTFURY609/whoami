@@ -8,3 +8,11 @@ turing/testimage2.webp
 turing/testimage3.jpg
 turing/eval_pictured_rocks_trail.jpg
 turing/ti4.avif
+__pycache__/
+.pytest_cache/
+.arena/
+
+.logs/
+# Owner's reference screenshots: local only, never committed (PR #40 review)
+/Screenshot *.png
+/docs/Screenshot *.png

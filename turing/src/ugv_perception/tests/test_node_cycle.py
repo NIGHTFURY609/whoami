@@ -17,7 +17,7 @@ from ugv_perception.adapter.frame import ImageFrame
 from ugv_perception.adapter.output import ADAPTER_ID, UNLABELED_NAME, RawSemOutput
 from ugv_perception.compose.load import load_compose_configs
 from ugv_perception.ingest.msgs import CameraInfoView, ImageView
-from ugv_perception.node.cycle import perception_cycle
+from ugv_perception.node.cycle import cycle_on_frame, decode_cycle_frame, perception_cycle
 from ugv_perception.node.wire import wire_compose_out
 from ugv_perception.port.ids import MASK_ENCODING
 
@@ -147,6 +147,63 @@ def test_cycle_bad_k_is_frame_none_degraded() -> None:
     assert spy.calls == 0
     assert out.decision.degraded is True
     assert out.mask is None
+
+
+def test_decode_cycle_frame_is_none_for_missing_or_invalid_input() -> None:
+    image, info = _views()
+    assert decode_cycle_frame(None, info) is None
+    assert decode_cycle_frame(image, None) is None
+    bad = CameraInfoView(
+        stamp_ns=info.stamp_ns,
+        frame_id=info.frame_id,
+        height=info.height,
+        width=info.width,
+        k=(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0),
+    )
+    assert decode_cycle_frame(image, bad) is None
+    frame = decode_cycle_frame(image, info)
+    assert frame is not None
+    assert frame.stamp_ns == _STAMP
+
+
+def test_cycle_on_frame_decodes_nothing_and_matches_perception_cycle() -> None:
+    table, gates, fresh = _kernels()
+    image, info = _views()
+    whole = perception_cycle(
+        image=image,
+        camera_info=info,
+        now_ns=_NOW,
+        adapter=SpyAdapter(),
+        remap_table=table,
+        gate_profile=gates,
+        freshness_profile=fresh,
+    )
+    frame = decode_cycle_frame(image, info)
+    spy = SpyAdapter()
+    split = cycle_on_frame(
+        frame=frame,
+        now_ns=_NOW,
+        adapter=spy,
+        remap_table=table,
+        gate_profile=gates,
+        freshness_profile=fresh,
+    )
+    assert spy.calls == 1
+    assert split.decision == whole.decision
+    assert np.array_equal(split.mask.classes, whole.mask.classes)
+    assert split.mask.header.stamp_ns == whole.mask.header.stamp_ns
+    # no frame: degraded, no inference
+    nothing = cycle_on_frame(
+        frame=None,
+        now_ns=_NOW,
+        adapter=spy,
+        remap_table=table,
+        gate_profile=gates,
+        freshness_profile=fresh,
+    )
+    assert spy.calls == 1
+    assert nothing.mask is None
+    assert nothing.decision.degraded is True
 
 
 def test_node_sources_have_no_cmd_vel() -> None:

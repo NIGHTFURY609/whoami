@@ -77,7 +77,7 @@ Baylands / RUGD / tutorial ONNX = eval/scaffold only.
   ┌────────────────────┐                │
   │ Nav2 costmaps      │◄───────────────┤
   │ SemanticLayer +    │   grow as new terrain is seen
-  │ optional VoxelLayer│◄── optional Depth Anything 3 Metric Large
+  │ optional VoxelLayer│◄── Depth Anything 3 Metric Large (also feeds RTAB-Map depth)
   └─────────┬──────────┘                │
             ▼                           │
   ┌────────────────────┐                │
@@ -102,7 +102,7 @@ Mission ──► Dev 2 (reference pose + convert to map)
             Dev 4 (Nav2 goal + replan) ◄── Dev 3 (live costmaps)
                                               ▲
                                               │
-                                          Dev 1 (port + optional DA3)
+                                          Dev 1 (port + DA3)
                 │
                 ▼
             Dev 5 (safety → /cmd_vel)
@@ -116,13 +116,13 @@ Same as `architecture.md` §6. This add-on does not swap adapters or engines.
 | Layer | Choice | Notes |
 |---|---|---|
 | Middleware | ROS 2 Lyrical | |
-| Vision recommended / minimum | Stereo·RGB-D / mono | `architecture.md` §10 |
+| Vision recommended / minimum | Stereo·RGB-D / mono | `architecture.md` §10. Current hardware: mono + DA3 pseudo-depth (large tier) |
 | **Brain** | RTAB-Map + Nav2 (Smac2D + RPP) | Goal may be off the current map |
 | **Perception Port** | Canonical mask + conf + freshness + frame | `architecture.md` §8 |
 | Adapter default outdoor | RUGD SegFormer-B5 | Intel OpenVINO GPU, CPU fallback. NVIDIA CUDA PyTorch (no OpenVINO). YOLOE selectable, not live |
 | Adapter scaffold | Tutorial ONNX | Eval only |
 | **Safety authority** | Priority mux / watchdog | `architecture.md` §3.1 · §12 |
-| Optional geometry | Depth Anything 3 Metric Large → VoxelLayer | §9: geometry lethal wins |
+| Depth / geometry | Depth Anything 3 Metric Large (Dev 1) → RTAB-Map RGB-D (required); → VoxelLayer (optional) | §9: geometry lethal wins |
 
 ## 7. Package layout
 ```
@@ -140,7 +140,7 @@ ugv_nav/
 
 ## 8. Perception Port (unchanged)
 
-Canonical IDs stay `{0 unknown, 1 traversable, 2 hazard}`. Unknown ≠ free. Stale mask → `/ugv/perception_degraded` → hold. Optional DA3 is a geometry side-channel; semantic never clears lethal geometry.
+Canonical IDs stay `{0 unknown, 1 traversable, 2 hazard}`. Unknown ≠ free. Stale mask → `/ugv/perception_degraded` → hold. DA3 is a geometry side-channel for costmaps (VoxelLayer optional) and also feeds RTAB-Map depth (`architecture.md` §10); semantic never clears lethal geometry.
 
 While the robot drives toward B, Dev 1 keeps publishing the same port (and optional depth). That is how previously unknown ground becomes cost. Dev 1 does **not** own B.
 

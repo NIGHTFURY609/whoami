@@ -192,6 +192,14 @@ class RugdSegformerAdapter:
         return decode_rugd_logits(logits, frame)
 
 
+def _axis_weights(n_src: int, n_dst: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Half-pixel bilinear sample positions along one axis: (i0, i1, weight of i1)."""
+    pos = np.arange(n_dst, dtype=np.float32)
+    pos = np.clip((pos + 0.5) * (n_src / n_dst) - 0.5, 0.0, n_src - 1)
+    i0 = np.floor(pos).astype(np.intp)
+    return i0, np.minimum(i0 + 1, n_src - 1), pos - i0.astype(np.float32)
+
+
 def _raw_from_maps(labels: np.ndarray, scores: np.ndarray, frame: ImageFrame) -> RawSemOutput:
     rh, rw = int(frame.rgb.shape[0]), int(frame.rgb.shape[1])
     labels_a = np.squeeze(np.asarray(labels, dtype=np.int32))
@@ -216,33 +224,19 @@ def _resize_map(src: np.ndarray, h: int, w: int) -> np.ndarray:
 
 
 def _resize_maps(src: np.ndarray, h: int, w: int) -> np.ndarray:
-    """Bilinear upsample. src is (H, W) or (C, H, W). One grid for all channels."""
-    squeeze = False
-    if src.ndim == 2:
-        src = src[None, ...]
-        squeeze = True
-    if src.ndim != 3:
+    """Bilinear resize of the last two axes (half-pixel centres, edge clamp), float32.
+
+    src is (H, W) or (C, H, W). Separable: rows first, then columns, with the sample positions
+    computed once for every channel. Same result as the 2D four-tap form; that form rebuilt
+    full-image index grids per class map and cost ~0.8 s per 640x480 frame for the 25 RUGD logit maps.
+    """
+    if src.ndim not in (2, 3):
         raise ValueError("src must be (H, W) or (C, H, W)")
-    _c, mh, mw = src.shape
     src_f = np.asarray(src, dtype=np.float32)
+    mh, mw = src_f.shape[-2:]
     if (mh, mw) == (h, w):
-        return src_f[0] if squeeze else src_f
-    ys = np.clip((np.arange(h, dtype=np.float32) + 0.5) * (mh / h) - 0.5, 0.0, mh - 1)
-    xs = np.clip((np.arange(w, dtype=np.float32) + 0.5) * (mw / w) - 0.5, 0.0, mw - 1)
-    y0 = np.floor(ys).astype(np.intp)
-    x0 = np.floor(xs).astype(np.intp)
-    y1 = np.minimum(y0 + 1, mh - 1)
-    x1 = np.minimum(x0 + 1, mw - 1)
-    wy = (ys - y0.astype(np.float32))[:, None]
-    wx = (xs - x0.astype(np.float32))[None, :]
-    y0i = y0[:, None]
-    y1i = y1[:, None]
-    x0i = x0[None, :]
-    x1i = x1[None, :]
-    out = (
-        src_f[:, y0i, x0i] * (1.0 - wy) * (1.0 - wx)
-        + src_f[:, y0i, x1i] * (1.0 - wy) * wx
-        + src_f[:, y1i, x0i] * wy * (1.0 - wx)
-        + src_f[:, y1i, x1i] * wy * wx
-    )
-    return out[0] if squeeze else out
+        return src_f
+    y0, y1, wy = _axis_weights(mh, h)
+    x0, x1, wx = _axis_weights(mw, w)
+    rows = src_f[..., y0, :] * (1.0 - wy)[:, None] + src_f[..., y1, :] * wy[:, None]
+    return rows[..., x0] * (1.0 - wx) + rows[..., x1] * wx

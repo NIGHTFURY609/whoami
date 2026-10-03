@@ -11,10 +11,8 @@ from ugv_perception.adapter.rugd import load_rugd_config
 from ugv_perception.backend import device
 from ugv_perception.backend.cuda_pytorch import CudaPytorchTensorBackend
 from ugv_perception.backend.device import (
-    can_overlap_gpu,
     cuda_available,
     intel_openvino_gpu_available,
-    is_gpu_device,
     pick_tensor_backend,
 )
 
@@ -52,44 +50,6 @@ def test_device_py_has_no_module_level_vendor_imports() -> None:
             assert "openvino" not in line
             assert "torch" not in line
             assert "transformers" not in line
-
-
-def test_is_gpu_device_intel_and_nvidia() -> None:
-    assert is_gpu_device("GPU")
-    assert is_gpu_device("GPU.0")
-    assert is_gpu_device("cuda")
-    assert is_gpu_device("CUDA")
-    assert not is_gpu_device("CPU")
-    assert not is_gpu_device("CPU.0")
-    assert not is_gpu_device("")
-    assert not is_gpu_device(None)
-
-
-def test_can_overlap_gpu_only_when_both_are_gpu() -> None:
-    class _B:
-        def __init__(self, device: str) -> None:
-            self.device = device
-
-    class _Adapter:
-        def __init__(self, device: str) -> None:
-            self._backend = _B(device)
-
-    class _Depth:
-        def __init__(self, device: str) -> None:
-            self._backend = _B(device)
-
-    class _Counting:
-        def __init__(self, inner: object) -> None:
-            self._inner = inner
-
-    assert can_overlap_gpu(_Adapter("GPU"), _Depth("GPU"))
-    assert can_overlap_gpu(_Adapter("cuda"), _Depth("GPU.0"))
-    assert can_overlap_gpu(_Counting(_Adapter("GPU")), _Depth("cuda"))
-    assert not can_overlap_gpu(_Adapter("CPU"), _Depth("CPU"))
-    assert not can_overlap_gpu(_Adapter("GPU"), _Depth("CPU"))
-    assert not can_overlap_gpu(_Adapter("CPU"), _Depth("GPU"))
-    assert not can_overlap_gpu(_Adapter("GPU"), None)
-    assert not can_overlap_gpu(_Adapter("GPU"), object())
 
 
 def test_adapters_stay_vendor_neutral() -> None:
@@ -159,6 +119,27 @@ def test_pick_none_when_no_weights(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr(device, "intel_openvino_gpu_available", lambda: True)
     monkeypatch.setattr(device, "cuda_available", lambda: True)
     assert pick_tensor_backend(ir_xml=xml, safetensors_dir=folder, kind="rugd") is None
+
+
+def test_openvino_networks_compile_pinned_to_fp32(monkeypatch: pytest.MonkeyPatch) -> None:
+    """FP32 on every backend: the GPU plugin would otherwise pick f16 on Arc even for an FP32 IR."""
+    ov = pytest.importorskip("openvino")
+    from ugv_perception.backend import openvino_gpu
+
+    seen: list[object] = []
+    monkeypatch.setattr(
+        openvino_gpu, "_compile_gpu_then_cpu", lambda core, model, config: seen.append(config) or (None, "CPU")
+    )
+
+    class _Model:
+        def input(self, i):
+            raise AssertionError("not reached")
+
+    backend = openvino_gpu.OpenVinoGpuTensorBackend()
+    backend._core, backend._model = object(), _Model()
+    with pytest.raises(AssertionError, match="not reached"):
+        backend._compile()
+    assert seen == [{ov.properties.hint.inference_precision: ov.Type.f32}]
 
 
 def test_cuda_tensor_load_raises_without_cuda(

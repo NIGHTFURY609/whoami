@@ -25,9 +25,16 @@ from ugv_perception.depth.geometry import (
 class DepthChannel:
     def __init__(self, backend: object) -> None:
         self._backend = backend
+        self._metres_disabled = False  # sticky, like the backends' rgb_pre_disabled
 
     def maps(self, rgb: np.ndarray, k: tuple[float, ...] | np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-        """Camera-sized meters (NaN holes) and unorganized XYZ. One infer."""
+        """Camera-sized meters (NaN holes) and unorganized XYZ. One infer, FP32 on every backend.
+
+        CUDA: `run_depth_metres` does the preprocess and the meters/resize on the device (geometry_gpu). If it
+        fails once, this channel stops asking for it and takes the path below for good.
+        Every backend with `run_all_from_rgb` (OpenVINO GPU on Arc, and CUDA as the fallback) preprocesses the
+        RGB on the device; the numpy preprocess is the last resort.
+        """
         if rgb.dtype != np.uint8 or rgb.ndim != 3 or rgb.shape[2] != 3:
             raise TypeError("rgb must be uint8 HWC")
         k_cam = np.asarray(k, dtype=np.float64).reshape(3, 3)
@@ -35,6 +42,13 @@ class DepthChannel:
         k_m, (mh, mw) = k_model(k_cam, (height, width))
         if model_hw(height, width) != (mh, mw):
             raise AdapterError("model size disagrees with K_model")
+        on_device = getattr(self._backend, "run_depth_metres", None)
+        if callable(on_device) and not self._metres_disabled:
+            try:
+                on_camera = on_device(rgb, focal_model(k_m), (mh, mw), (height, width))
+                return on_camera, backproject(on_camera, k_cam)
+            except AdapterError:
+                self._metres_disabled = True
         self._backend.ensure_hw(mh, mw)
         first, second = two_step_hw(height, width)
         if second != (mh, mw):

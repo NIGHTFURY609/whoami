@@ -1,5 +1,26 @@
 # Project A: Production Work Breakdown & Modular Architecture
 
+
+---
+
+Development Ownership Policy
+
+"dev.md" defines the functional domain and ownership of each developer. It helps clarify what to do in each domain, but it is not a fixed or exhaustive list of development tasks, examples, or clear ownership boundaries.
+
+As development progresses, new tasks, changes, or conflicting requirements may arise. Any task shall be owned and implemented by the developer whose defined functional domain the task falls under, even if that task is not explicitly listed in "dev.md".
+
+Rules
+
+1. "arch.md" has highest authority.
+   If any task, implementation decision, or developer responsibility conflicts with "arch.md", "arch.md" takes precedence.
+2. Functional-domain ownership resolves task assignment.
+   When a new or conflicting task arises between developers, the developer whose functional domain the task belongs to owns the task.
+3. Existing task lists do not define ownership boundaries.
+   They provide context for understanding responsibilities, but ownership is determined by the functional domains defined in "dev.md".
+4. Cross-domain tasks require coordination.
+   The developer owning the primary functional domain remains responsible for the task and coordinates with other affected developers where necessary.
+5. "dev.md" defines ownership, not architecture. It cannot override or reinterpret "arch.md"
+---
 **File:** `dev.md`  
 **Reference Document:** [`architecture.md`](file:///home/light/Documents/sih/architecture.md)  
 **Scope:** Deployable Software-Only Product for Differential-Drive UGV Autonomous Outdoor Navigation  
@@ -85,6 +106,7 @@ All 5 developers integrate against the topic contracts defined in `architecture.
 | Camera `Image` + `CameraInfo` | `sensor_msgs/msg/Image`<br>`sensor_msgs/msg/CameraInfo` | **Dev 5** (bringup / driver) | **Dev 1**, **Dev 2** | Shared vision sensor (architecture §5). Stamp = image time; `frame_id` matches `CameraInfo`. Dev 1 does **not** open V4L2. Intrinsics YAML: Dev 2 `config/cameras/`. |
 | `/segmentation/mask` | `sensor_msgs/msg/Image` | **Dev 1** | **Dev 3**, Dev 5 | Encoding `mono8`, pixels strictly in `{0: unknown, 1: traversable, 2: hazard}`. Header timestamp matches source frame. |
 | `/ugv/perception_degraded` | `std_msgs/msg/Bool` | **Dev 1** | **Dev 5** | Emits `true` if latency > `perception_max_age` or confidence gates trip. |
+| `/perception/depth_cloud` | `sensor_msgs/msg/PointCloud2` | **Dev 1** | **Dev 2**, Dev 3 | x/y/z in metres. Stamp = source image stamp, frame = camera optical frame, back-projected with the raw K at camera resolution. |
 | `TF (map->odom->base)` | `tf2_msgs/msg/TFMessage` | **Dev 2** | **Dev 3**, Dev 4, Dev 5 | Continuous tree, jitter $< 50\text{ ms}$, publish rate $\ge 15\text{ Hz}$. |
 | `/ugv/pose_valid` | `std_msgs/msg/Bool` | **Dev 2** | **Dev 5** | Emits `false` if tracking lost, TF expires, or covariance explodes (§10.1). |
 | `/global_costmap/costmap`<br>`/local_costmap/costmap` | `nav_msgs/msg/OccupancyGrid` | **Dev 3** | **Dev 4** | 2D occupancy grid combining semantic layers and geometry precedence (§9). |
