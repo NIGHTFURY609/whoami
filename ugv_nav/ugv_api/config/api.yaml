@@ -11,18 +11,16 @@ ugv_api:
     rtabmap_service_ns: /rtabmap/rtabmap   # same as ugv_localization mode_cli
     map_frame: map
     base_frame: base_link
-    # 3D map viewer inputs. The heavy subscriptions (cloud, trajectory, grid, live)
+    # 3D map viewer inputs. The heavy subscriptions (trajectory, grid, live)
     # exist only while a client keeps calling GET /api/v1/map: idle_timeout_s after the last call they are
     # destroyed. The two stats topics and the TF poll are always on. Values must keep their YAML type.
     map:
-      cloud_point_budget: 500000      # points in a served cloud, picked by spatial hash at cloud_spacing_m
-      cloud_spacing_m: 0.05
-      live_point_budget: 20000        # live scan (Dev 1's depth cloud, full resolution): points served
+      live_point_budget: 150000       # live scan (Dev 1's depth cloud, full resolution): points served
+      live_spacing_m: 0.02            # ... thinned to one point per voxel of this size first
       live_range_min_m: 0.3
       live_range_max_m: 8.0
       idle_timeout_s: 10.0
       stats_stale_s: 5.0              # a stats source silent this long is dropped from the map status
-      cloud_topic: /rtabmap/cloud_map
       trajectory_topic: /rtabmap/mapPath
       grid_topic: /global_costmap/costmap
       live_cloud_topic: /perception/depth_cloud

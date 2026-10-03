@@ -14,7 +14,7 @@ Resources (operator items of architecture.md only):
   DELETE /api/v1/navigation/goals/{id}       cancel -> 202
   GET  /api/v1/map                           MapStatus: epoch, per-layer seq, stats (the map view's demand heartbeat)
   GET  /api/v1/map/pose                      map -> base_link from TF
-  GET  /api/v1/map/{cloud|trajectory|grid|live}   Binary format v1, 503 problem until first data
+  GET  /api/v1/map/{trajectory|grid|live}         Binary format v1, 503 problem until first data
   GET  /api/v1/telemetry/stream              text/event-stream: safety, command, localization, navigation, map, pose
 """
 
@@ -116,22 +116,17 @@ def _pose_values(value: Any) -> tuple[float, ...] | None:
 
 
 def _layer_encoders(
-    *, point_budget: int, spacing_m: float, live_budget: int
+    *, live_spacing_m: float, live_budget: int
 ) -> dict[str, Callable[[Any, int, int, float], bytes]]:
     """layer -> encode(source, epoch, seq, stamp_s) -> bytes, in the form MapStore.blob calls it. The `source`
     each layer takes is what MapStore.put was given (documented per layer below); the ROS side builds exactly
     these from its messages. Calls go through the `codec` module so a test can count them."""
 
-    def cloud(src: dict, epoch: int, seq: int, stamp_s: float) -> bytes:
-        # {"fields": [(name, offset, datatype, count)], "point_step", "n_points", "is_bigendian", "data"}
-        xyz, rgb = codec.cloud_view(**src)
-        return codec.encode_cloud(xyz, rgb, epoch=epoch, seq=seq, stamp_s=stamp_s, budget=point_budget,
-                                  spacing_m=spacing_m)
-
     def live(src: dict, epoch: int, seq: int, stamp_s: float) -> bytes:
-        # {"xyz": (N, 3) float32} in the map frame: Dev 1's full-resolution depth cloud, cut to its own budget
+        # {"xyz": (N, 3) float32} in the map frame: Dev 1's full-resolution depth cloud, thinned evenly to one
+        # point per voxel of live_spacing_m and at most live_budget points
         return codec.encode_cloud(src["xyz"], None, epoch=epoch, seq=seq, stamp_s=stamp_s, budget=live_budget,
-                                  spacing_m=spacing_m)
+                                  spacing_m=live_spacing_m, thin=True)
 
     def trajectory(src: Any, epoch: int, seq: int, stamp_s: float) -> bytes:
         # (N, 7) float32: x y z qx qy qz qw
@@ -142,23 +137,19 @@ def _layer_encoders(
         return codec.encode_grid(src["cells"], epoch=epoch, seq=seq, stamp_s=stamp_s, resolution=src["resolution"],
                                  origin_xy=src["origin_xy"], origin_yaw=src["origin_yaw"])
 
-    return {"cloud": cloud, "trajectory": trajectory, "grid": grid, "live": live}
+    return {"trajectory": trajectory, "grid": grid, "live": live}
 
 
 def create_app(robot: Robot, store: StateStore, goals: GoalRegistry, *, telemetry_hz: float = 5.0,
                cors_origins: list[str] | None = None, maps: MapStore | None = None,
-               cloud_point_budget: int = 500_000, cloud_spacing_m: float = 0.05,
-               live_point_budget: int = 20_000) -> FastAPI:
+               live_point_budget: int = 150_000, live_spacing_m: float = 0.02) -> FastAPI:
     if not telemetry_hz > 0:
         raise ValueError("telemetry_hz must be > 0")
-    if cloud_point_budget < 0:
-        raise ValueError("cloud_point_budget must be >= 0")
-    if not (math.isfinite(cloud_spacing_m) and cloud_spacing_m > 0):
-        raise ValueError("cloud_spacing_m must be finite and > 0")
+    if not (math.isfinite(live_spacing_m) and live_spacing_m > 0):
+        raise ValueError("live_spacing_m must be finite and > 0")
     if live_point_budget < 0:
         raise ValueError("live_point_budget must be >= 0")
-    encoders = _layer_encoders(point_budget=cloud_point_budget, spacing_m=cloud_spacing_m,
-                               live_budget=live_point_budget)
+    encoders = _layer_encoders(live_spacing_m=live_spacing_m, live_budget=live_point_budget)
     app = FastAPI(
         title="UGV operator API",
         version=__version__,

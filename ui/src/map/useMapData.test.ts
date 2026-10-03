@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError, LAYERS, type Layer, type MapStatus } from '../source/api'
 import {
-  MIN_INTERVAL_MS, STATUS_POLL_MS, STATUS_STALE_MS, createMapSession, isStale, layerKey, nextFetches, schedule,
-  type Frame,
+  MIN_INTERVAL_MS, STATUS_POLL_LIVE_MS, STATUS_POLL_MS, STATUS_STALE_MS, createMapSession, isStale, layerKey, nextFetches,
+  schedule, statusPollMs, type Frame,
 } from './useMapData'
 
 const none = <T>(v: T): Record<Layer, T> => Object.fromEntries(LAYERS.map((l) => [l, v])) as Record<Layer, T>
@@ -13,21 +13,21 @@ const mapStatus = (epoch: number, seq: Partial<Record<Layer, number>> = {}): Map
 
 describe('layerKey', () => {
   it('is the epoch and the layer sequence', () => {
-    expect(layerKey(mapStatus(7, { cloud: 3 }), 'cloud')).toBe('7:3')
-    expect(layerKey(mapStatus(7, { cloud: 3 }), 'grid')).toBe('7:0')
+    expect(layerKey(mapStatus(7, { live: 3 }), 'live')).toBe('7:3')
+    expect(layerKey(mapStatus(7, { live: 3 }), 'grid')).toBe('7:0')
   })
 })
 
 describe('nextFetches', () => {
   it('fetches a layer whose epoch:seq key differs from the one held, and only that one', () => {
-    const status = mapStatus(5, { cloud: 3, trajectory: 2 })
-    const have = { ...none<string | null>(null), cloud: '5:3', trajectory: '5:1' }
+    const status = mapStatus(5, { grid: 3, trajectory: 2 })
+    const have = { ...none<string | null>(null), grid: '5:3', trajectory: '5:1' }
     expect(nextFetches(status, have, ALL)).toEqual(['trajectory'])
   })
 
   it('fetches nothing when every held key matches', () => {
-    const status = mapStatus(5, { cloud: 3, grid: 9 })
-    const have = { ...none<string | null>(null), cloud: '5:3', grid: '5:9' }
+    const status = mapStatus(5, { live: 3, grid: 9 })
+    const have = { ...none<string | null>(null), live: '5:3', grid: '5:9' }
     expect(nextFetches(status, have, ALL)).toEqual([])
   })
 
@@ -36,7 +36,7 @@ describe('nextFetches', () => {
   })
 
   it('refetches every enabled layer when the epoch changes even though no seq did', () => {
-    const before = mapStatus(5, { cloud: 3, trajectory: 4, grid: 1, live: 8 })
+    const before = mapStatus(5, { trajectory: 4, grid: 1, live: 8 })
     const have = Object.fromEntries(LAYERS.map((l) => [l, layerKey(before, l)])) as Record<Layer, string | null>
     expect(nextFetches(before, have, ALL)).toEqual([])
     const restarted = { ...before, epoch: 6 }
@@ -45,31 +45,40 @@ describe('nextFetches', () => {
   })
 
   it('never fetches a layer whose seq is 0, whatever is held', () => {
-    const status = mapStatus(5, { cloud: 0, grid: 2 })
+    const status = mapStatus(5, { live: 0, grid: 2 })
     expect(nextFetches(status, none<string | null>(null), ALL)).toEqual(['grid'])
-    expect(nextFetches(status, { ...none<string | null>(null), cloud: '4:9' }, ALL)).toEqual(['grid'])
+    expect(nextFetches(status, { ...none<string | null>(null), live: '4:9' }, ALL)).toEqual(['grid'])
   })
 
   it('never fetches a disabled layer', () => {
-    const status = mapStatus(5, { cloud: 1, trajectory: 1, live: 1 })
+    const status = mapStatus(5, { grid: 1, trajectory: 1, live: 1 })
     expect(nextFetches(status, none<string | null>(null), only('trajectory'))).toEqual(['trajectory'])
     expect(nextFetches(status, none<string | null>(null), none(false))).toEqual([])
   })
 
   it('returns layers in LAYERS order', () => {
-    const status = mapStatus(1, { live: 1, grid: 1, cloud: 1 })
-    expect(nextFetches(status, none<string | null>(null), ALL)).toEqual(['cloud', 'grid', 'live'])
+    const status = mapStatus(1, { live: 1, grid: 1, trajectory: 1 })
+    expect(nextFetches(status, none<string | null>(null), ALL)).toEqual(['trajectory', 'grid', 'live'])
   })
 
   it('does not treat a held key from another epoch with the same seq as current', () => {
-    const status = mapStatus(2, { cloud: 3 })
-    expect(nextFetches(status, { ...none<string | null>(null), cloud: '1:3' }, ALL)).toEqual(['cloud'])
+    const status = mapStatus(2, { live: 3 })
+    expect(nextFetches(status, { ...none<string | null>(null), live: '1:3' }, ALL)).toEqual(['live'])
   })
 })
 
 describe('MIN_INTERVAL_MS', () => {
   it('is the specified minimum between fetch starts of one layer', () => {
-    expect(MIN_INTERVAL_MS).toEqual({ cloud: 2000, trajectory: 1000, grid: 1000, live: 500 })
+    expect(MIN_INTERVAL_MS).toEqual({ trajectory: 1000, grid: 1000, live: 200 })
+  })
+})
+
+describe('statusPollMs', () => {
+  it('is a quarter second while the live scan is wanted and a second otherwise', () => {
+    expect([STATUS_POLL_LIVE_MS, STATUS_POLL_MS]).toEqual([250, 1000])
+    expect(statusPollMs(only('live'))).toBe(250)
+    expect(statusPollMs(ALL)).toBe(250)
+    expect(statusPollMs(only('trajectory', 'grid'))).toBe(1000)
   })
 })
 
@@ -78,7 +87,7 @@ describe('schedule', () => {
   const idle = none(false)
 
   it('starts every wanted layer that has never been started', () => {
-    expect(schedule(['cloud', 'live'], 10_000, never, idle)).toEqual({ start: ['cloud', 'live'], retryInMs: null })
+    expect(schedule(['trajectory', 'live'], 10_000, never, idle)).toEqual({ start: ['trajectory', 'live'], retryInMs: null })
   })
 
   it('does nothing when nothing is wanted', () => {
@@ -86,36 +95,36 @@ describe('schedule', () => {
   })
 
   it('never starts a second fetch for a layer that is in flight, and does not ask to be woken for it', () => {
-    const plan = schedule(['cloud', 'grid'], 10_000, never, { ...idle, cloud: true })
+    const plan = schedule(['trajectory', 'grid'], 10_000, never, { ...idle, trajectory: true })
     expect(plan).toEqual({ start: ['grid'], retryInMs: null })
   })
 
   it('holds a layer back until its own minimum interval since the last start has passed', () => {
-    const lastStart = { ...never, cloud: 10_000, trajectory: 10_000 }
-    // 999 ms later trajectory (1000) is still too early, cloud (2000) needs 1001 ms more
-    expect(schedule(['cloud', 'trajectory'], 10_999, lastStart, idle)).toEqual({ start: [], retryInMs: 1 })
-    // exactly the interval later trajectory may start; cloud still waits another 1000 ms
-    expect(schedule(['cloud', 'trajectory'], 11_000, lastStart, idle)).toEqual({ start: ['trajectory'], retryInMs: 1000 })
-    expect(schedule(['cloud'], 12_000, lastStart, idle)).toEqual({ start: ['cloud'], retryInMs: null })
+    const lastStart = { ...never, live: 10_000, trajectory: 10_000 }
+    // 150 ms later live (200) needs 50 ms more, trajectory (1000) 850 ms
+    expect(schedule(['live', 'trajectory'], 10_150, lastStart, idle)).toEqual({ start: [], retryInMs: 50 })
+    // exactly the interval later live may start; trajectory still waits another 800 ms
+    expect(schedule(['live', 'trajectory'], 10_200, lastStart, idle)).toEqual({ start: ['live'], retryInMs: 800 })
+    expect(schedule(['trajectory'], 11_000, lastStart, idle)).toEqual({ start: ['trajectory'], retryInMs: null })
   })
 
   it('asks to be woken at the earliest moment any held-back layer becomes due', () => {
-    const lastStart = { ...never, cloud: 10_000, live: 10_300, trajectory: 9_600 }
-    const plan = schedule(['cloud', 'live', 'trajectory'], 10_400, lastStart, idle)
+    const lastStart = { ...never, grid: 10_000, live: 10_300, trajectory: 9_600 }
+    const plan = schedule(['grid', 'live', 'trajectory'], 10_400, lastStart, idle)
     expect(plan.start).toEqual([])
-    expect(plan.retryInMs).toBe(200) // live: 10_300 + 500 - 10_400 = 400, trajectory: 9_600 + 1000 - 10_400 = 200
+    expect(plan.retryInMs).toBe(100) // grid: 600, live: 10_300 + 200 - 10_400 = 100, trajectory: 9_600 + 1000 - 10_400 = 200
   })
 
   it('does not count an in-flight layer toward the wake-up even when its interval has not passed', () => {
-    const lastStart = { ...never, cloud: 10_000, grid: 10_000 }
-    const plan = schedule(['cloud', 'grid'], 10_100, lastStart, { ...idle, grid: true })
-    expect(plan).toEqual({ start: [], retryInMs: 1900 })
+    const lastStart = { ...never, trajectory: 10_000, grid: 10_000 }
+    const plan = schedule(['trajectory', 'grid'], 10_100, lastStart, { ...idle, grid: true })
+    expect(plan).toEqual({ start: [], retryInMs: 900 })
   })
 
   it('keeps the order it was given and mixes started and held-back layers', () => {
     const lastStart = { ...never, trajectory: 9_900 }
-    const plan = schedule(['cloud', 'trajectory', 'live'], 10_000, lastStart, idle)
-    expect(plan).toEqual({ start: ['cloud', 'live'], retryInMs: 900 })
+    const plan = schedule(['grid', 'trajectory', 'live'], 10_000, lastStart, idle)
+    expect(plan).toEqual({ start: ['grid', 'live'], retryInMs: 900 })
   })
 
   it('never waits longer than the layer interval if the clock went backwards', () => {
@@ -217,7 +226,7 @@ describe('createMapSession', () => {
 
   it('polls the status at once, then once a second, and stops entirely on stop()', async () => {
     expect(STATUS_POLL_MS).toBe(1000)
-    const h = harness()
+    const h = harness(only('trajectory', 'grid'))
     h.session.start()
     expect(h.paths()).toEqual(['/map'])
     await h.answer('/map', statusBody(1))
@@ -229,6 +238,23 @@ describe('createMapSession', () => {
     expect(h.pending[1].signal.aborted).toBe(true) // the in-flight poll is aborted
     await vi.advanceTimersByTimeAsync(10_000)
     expect(h.paths()).toEqual(['/map', '/map']) // and nothing polls again
+    h.session.dispose()
+  })
+
+  it('polls four times a second while the live scan is wanted, and slows down again when it is not', async () => {
+    const h = harness(only('live'))
+    h.session.start()
+    await h.answer('/map', statusBody(1))
+    await vi.advanceTimersByTimeAsync(249)
+    expect(h.count('/map')).toBe(1)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(h.count('/map')).toBe(2)
+    h.session.setEnabled(only('grid'))
+    await h.answer('/map', statusBody(1))
+    await vi.advanceTimersByTimeAsync(999)
+    expect(h.count('/map')).toBe(2)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(h.count('/map')).toBe(3)
     h.session.dispose()
   })
 
@@ -285,10 +311,10 @@ describe('createMapSession', () => {
   it('does not fetch disabled layers or layers with seq 0, and fetches a layer at once when it is enabled later', async () => {
     const h = harness(only('grid'))
     h.session.start()
-    await h.answer('/map', statusBody(1, { grid: 1, cloud: 1, live: 0 }))
+    await h.answer('/map', statusBody(1, { grid: 1, trajectory: 1, live: 0 }))
     expect(h.paths()).toEqual(['/map', '/map/grid'])
-    h.session.setEnabled(only('grid', 'cloud', 'live'))
-    expect(h.paths()).toEqual(['/map', '/map/grid', '/map/cloud']) // live has nothing yet
+    h.session.setEnabled(only('grid', 'trajectory', 'live'))
+    expect(h.paths()).toEqual(['/map', '/map/grid', '/map/trajectory']) // live has nothing yet
     h.session.dispose()
   })
 
@@ -325,19 +351,20 @@ describe('createMapSession', () => {
   })
 
   it('waits out the layer minimum interval and starts the fetch exactly when it has passed', async () => {
-    const h = harness(only('cloud'))
+    const h = harness(only('grid'))
     h.session.start()
     const t0 = Date.now()
-    await h.answer('/map', statusBody(1, { cloud: 1 }))
-    await h.answer('/map/cloud', 'c1')
-    await vi.advanceTimersByTimeAsync(1000)
-    await h.answer('/map', statusBody(1, { cloud: 2 })) // 1000 ms after the first start: too early (cloud: 2000)
-    expect(h.count('/map/cloud')).toBe(1)
-    await vi.advanceTimersByTimeAsync(999)
-    expect(h.count('/map/cloud')).toBe(1)
+    await vi.advanceTimersByTimeAsync(500) // a slow first status: the grid fetch starts 500 ms in
+    await h.answer('/map', statusBody(1, { grid: 1 }))
+    await h.answer('/map/grid', 'g1')
+    await vi.advanceTimersByTimeAsync(500)
+    await h.answer('/map', statusBody(1, { grid: 2 })) // 500 ms after the first start: too early (grid: 1000)
+    expect(h.count('/map/grid')).toBe(1)
+    await vi.advanceTimersByTimeAsync(499)
+    expect(h.count('/map/grid')).toBe(1)
     await vi.advanceTimersByTimeAsync(1)
-    expect(h.count('/map/cloud')).toBe(2)
-    expect(Date.now() - t0).toBe(2000)
+    expect(h.count('/map/grid')).toBe(2)
+    expect(Date.now() - t0).toBe(1500)
     h.session.dispose()
   })
 

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
-  GROUND_MARGIN_M, GROUND_MAX_DIVISIONS, GROUND_MIN_SIZE_M, LIVE_BAND_ABOVE_M, LIVE_BAND_BELOW_M, VIEW_MAX_DIST_M,
-  VIEW_MIN_DIST_M, cloudBounds, gridQuad, groundGridFor, homeView, liveHeightBand, pointBounds, unionBounds, yawOf,
+  GROUND_MARGIN_M, GROUND_MAX_DIVISIONS, GROUND_MIN_SIZE_M, HEAT_BAND_ABOVE_M, HEAT_BAND_BELOW_M, VIEW_MAX_DIST_M,
+  VIEW_MIN_DIST_M, cloudBounds, gridQuad, groundGridFor, heatHeightBand, homeView, pointBounds, unionBounds, yawOf,
   type Bounds,
 } from './scene-math'
 
@@ -187,15 +187,15 @@ describe('groundGridFor', () => {
   })
 })
 
-describe('liveHeightBand', () => {
-  it('is a fixed band around the robot base, with the ground a quarter of the way up', () => {
-    expect(liveHeightBand(0)).toEqual([-LIVE_BAND_BELOW_M, LIVE_BAND_ABOVE_M])
-    expect(liveHeightBand(1.5)).toEqual([1.5 - LIVE_BAND_BELOW_M, 1.5 + LIVE_BAND_ABOVE_M])
-    expect(LIVE_BAND_BELOW_M / (LIVE_BAND_BELOW_M + LIVE_BAND_ABOVE_M)).toBeCloseTo(0.25, 12)
+describe('heatHeightBand', () => {
+  it('is a fixed band around the robot base, with the ground a fifth of the way up', () => {
+    expect(heatHeightBand(0)).toEqual([-HEAT_BAND_BELOW_M, HEAT_BAND_ABOVE_M])
+    expect(heatHeightBand(1.5)).toEqual([1.5 - HEAT_BAND_BELOW_M, 1.5 + HEAT_BAND_ABOVE_M])
+    expect(HEAT_BAND_BELOW_M / (HEAT_BAND_BELOW_M + HEAT_BAND_ABOVE_M)).toBeCloseTo(0.2, 12)
   })
 
   it('uses the map ground when the robot height is not known', () => {
-    expect(liveHeightBand(null)).toEqual(liveHeightBand(0))
-    expect(liveHeightBand(Number.NaN)).toEqual(liveHeightBand(0))
+    expect(heatHeightBand(null)).toEqual(heatHeightBand(0))
+    expect(heatHeightBand(Number.NaN)).toEqual(heatHeightBand(0))
   })
 })

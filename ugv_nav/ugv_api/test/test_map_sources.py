@@ -266,30 +266,28 @@ def test_stamp_seconds_uses_the_message_stamp_and_falls_back_for_an_unstamped_on
 
 def test_map_config_defaults_are_the_values_the_gateway_ships_with():
     c = ms.MapConfig()
-    assert (c.cloud_point_budget, c.cloud_spacing_m) == (500_000, 0.05)
-    assert (c.live_point_budget, c.live_range_min_m, c.live_range_max_m) == (20_000, 0.3, 8.0)
+    assert (c.live_point_budget, c.live_spacing_m) == (150_000, 0.02)
+    assert (c.live_range_min_m, c.live_range_max_m) == (0.3, 8.0)
     assert c.idle_timeout_s == 10.0
-    assert (c.cloud_topic, c.trajectory_topic, c.grid_topic) == ("/rtabmap/cloud_map", "/rtabmap/mapPath",
-                                                                  "/global_costmap/costmap")
+    assert (c.trajectory_topic, c.grid_topic) == ("/rtabmap/mapPath", "/global_costmap/costmap")
     assert c.live_cloud_topic == "/perception/depth_cloud"
     assert c.map_stats_topic == "/ugv/map/stats"
 
 
 def test_map_config_app_kwargs_are_exactly_the_tunables_create_app_takes():
     accepted = set(inspect.signature(create_app).parameters)
-    kwargs = ms.MapConfig(cloud_point_budget=10, cloud_spacing_m=0.25).app_kwargs()
-    assert set(kwargs) == {"cloud_point_budget", "cloud_spacing_m", "live_point_budget"}
+    kwargs = ms.MapConfig(live_point_budget=10, live_spacing_m=0.25).app_kwargs()
+    assert set(kwargs) == {"live_point_budget", "live_spacing_m"}
     assert set(kwargs) <= accepted
-    assert kwargs["cloud_point_budget"] == 10 and kwargs["cloud_spacing_m"] == 0.25
+    assert kwargs["live_point_budget"] == 10 and kwargs["live_spacing_m"] == 0.25
 
 
 @pytest.mark.parametrize(
     "bad",
     [
-        dict(cloud_point_budget=-1), dict(cloud_spacing_m=0.0), dict(cloud_spacing_m=math.nan),
-        dict(live_point_budget=-1), dict(live_range_min_m=-0.1), dict(live_range_max_m=0.0),
+        dict(live_spacing_m=0.0), dict(live_spacing_m=math.nan), dict(live_point_budget=-1), dict(live_range_min_m=-0.1), dict(live_range_max_m=0.0),
         dict(live_range_min_m=5.0, live_range_max_m=5.0), dict(idle_timeout_s=0.0), dict(idle_timeout_s=math.nan),
-        dict(stats_stale_s=0.0), dict(cloud_topic=""), dict(live_cloud_topic="relative/topic"),
+        dict(stats_stale_s=0.0), dict(grid_topic=""), dict(live_cloud_topic="relative/topic"),
     ],
 )
 def test_map_config_refuses_a_bad_value_naming_it(bad):

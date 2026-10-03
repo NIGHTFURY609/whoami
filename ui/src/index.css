@@ -399,6 +399,10 @@ code { font-size: 10px; color: var(--text); overflow-wrap: anywhere; }
 .mapview .livefeed-layers { flex: 0 1 auto; flex-wrap: wrap; justify-content: flex-end; gap: 4px; }
 .mapview .livefeed-layers button { padding: 3px 6px; }
 .mapview .livefeed-layers button:disabled { opacity: 0.4; cursor: not-allowed; }
+/* a layer button and, for live, its terrain | scan switch, kept together when the bar wraps */
+.mapview .livefeed-group { display: flex; gap: 4px; }
+.mapview .livefeed-seg { display: flex; }
+.mapview .livefeed-seg button + button { border-left: 0; }
 .mapview-stage { position: relative; min-height: 0; overflow: hidden; background: var(--bg); }
 .mapview-gl { position: absolute; inset: 0; }
 .mapview-stage::before, .mapview-stage::after {

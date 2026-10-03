@@ -33,7 +33,7 @@ from ugv_api.watches import Timeouts  # noqa: E402
 
 PROBLEM = "application/problem+json"
 OCTET = "application/octet-stream"
-LAYERS = ("cloud", "trajectory", "grid", "live")
+LAYERS = ("trajectory", "grid", "live")
 NOW_NS = 1_000 * 1_000_000_000
 class FakeRobot:
     """Implements app.Robot with a clock the test moves by hand."""
@@ -87,16 +87,6 @@ def rig() -> Rig:
 # ---------------------------------------------------------------------------------- source builders
 
 
-def cloud_source(n: int = 6, *, rgb: bool = True) -> dict:
-    """The dict Task 15 stores for `cloud`: PointCloud2 fields, one point per row, x y z f32 then a packed rgb word."""
-    dt = np.dtype([("x", "<f4"), ("y", "<f4"), ("z", "<f4"), ("rgb", "<u4")])
-    arr = np.zeros(n, dtype=dt)
-    arr["x"], arr["y"], arr["z"] = np.arange(n) * 0.5, np.arange(n) * -0.25, np.arange(n) * 1.0
-    arr["rgb"] = (np.arange(n) + 1) * 0x010203  # 0x00RRGGBB
-    fields = [("x", 0, 7, 1), ("y", 4, 7, 1), ("z", 8, 7, 1)] + ([("rgb", 12, 6, 1)] if rgb else [])
-    return {"fields": fields, "point_step": 16, "n_points": n, "is_bigendian": False, "data": arr.tobytes()}
-
-
 def grid_source() -> dict:
     cells = np.arange(12, dtype=np.int8).reshape(3, 4) * 8 - 1
     return {"cells": cells, "resolution": 0.25, "origin_xy": (-0.5, 1.0), "origin_yaw": 0.5}
@@ -111,7 +101,7 @@ def live_source(n: int = 6) -> dict:
 
 
 SOURCES = {
-    "cloud": cloud_source, "trajectory": trajectory_source, "grid": grid_source, "live": live_source,
+    "trajectory": trajectory_source, "grid": grid_source, "live": live_source,
 }
 assert tuple(SOURCES) == LAYERS
 
@@ -164,43 +154,27 @@ def get_binary(rig: Rig, layer: str):
     return r
 
 
-def test_cloud_decodes_with_colour_and_the_store_epoch_seq_and_stamp(rig):
-    src = cloud_source(6)
-    rig.maps.put("cloud", src, 42.5)
-    d = mapread.cloud(get_binary(rig, "cloud").content)
-    assert (d["epoch"], d["seq"], d["stamp_s"]) == (1234, 1, 42.5)
-    assert d["count"] == 6 and d["source_count"] == 6 and d["has_rgb"]
-    np.testing.assert_array_equal(d["xyz"][:, 0], np.arange(6) * 0.5)
-    np.testing.assert_array_equal(d["xyz"][:, 2], np.arange(6) * 1.0)
-    assert d["rgb"][0].tolist() == [1, 2, 3] and d["rgb"][5].tolist() == [6, 12, 18]
-    assert d["spacing_m"] == pytest.approx(0.05)  # the default cloud_spacing_m
-
-
-def test_cloud_without_a_colour_field_has_no_rgb_block(rig):
-    rig.maps.put("cloud", cloud_source(4, rgb=False), 1.0)
-    d = mapread.cloud(get_binary(rig, "cloud").content)
-    assert d["count"] == 4 and not d["has_rgb"]
-
-
-def test_cloud_is_cut_to_the_configured_budget_and_spacing():
-    rig = Rig(MapStore(), cloud_point_budget=4, cloud_spacing_m=0.2)
-    rig.maps.put("cloud", cloud_source(6), 1.0)
-    d = mapread.cloud(get_binary(rig, "cloud").content)
-    assert d["count"] == 4 and d["source_count"] == 6
-    assert d["spacing_m"] == pytest.approx(0.2)
-
-
-def test_live_cloud_has_no_colour_and_its_own_budget():
-    rig = Rig(MapStore(epoch=9), cloud_point_budget=2)  # the map cloud's budget does not cut the live scan
+def test_live_cloud_has_no_colour_and_the_store_epoch_seq_and_stamp(rig):
     rig.maps.put("live", live_source(6), 7.0)
     d = mapread.cloud(get_binary(rig, "live").content)
-    assert (d["epoch"], d["seq"], d["stamp_s"]) == (9, 1, 7.0)
+    assert (d["epoch"], d["seq"], d["stamp_s"]) == (1234, 1, 7.0)
     assert d["count"] == 6 and d["source_count"] == 6 and not d["has_rgb"]
-    np.testing.assert_array_equal(d["xyz"], live_source(6)["xyz"])
+    np.testing.assert_array_equal(d["xyz"], live_source(6)["xyz"])  # 3 m apart: one point per voxel, all kept
+    assert d["spacing_m"] == pytest.approx(0.02)  # the default live_spacing_m
+
+
+def test_live_cloud_keeps_one_point_per_voxel_then_cuts_evenly_to_its_budget():
+    rig = Rig(MapStore(), live_spacing_m=0.5)
+    pts = np.array([[0, 0, 1], [0.1, 0.1, 1.1], [2, 0, 1], [2.2, 0, 1.2], [4, 0, 1]], np.float32)
+    rig.maps.put("live", {"xyz": pts}, 1.0)
+    d = mapread.cloud(get_binary(rig, "live").content)
+    assert d["source_count"] == 5 and d["count"] == 3  # the second point of each shared voxel is dropped
+    np.testing.assert_array_equal(d["xyz"], pts[[0, 2, 4]])  # first of each voxel, in input order
     cut = Rig(MapStore(), live_point_budget=4)  # Dev 1's cloud is full resolution: the live budget cuts it
-    cut.maps.put("live", live_source(6), 7.0)
+    cut.maps.put("live", live_source(10), 7.0)
     d = mapread.cloud(get_binary(cut, "live").content)
-    assert d["count"] == 4 and d["source_count"] == 6
+    assert d["count"] == 4 and d["source_count"] == 10
+    np.testing.assert_array_equal(d["xyz"], live_source(10)["xyz"][[0, 3, 6, 9]])  # an even stride, ends kept
 
 
 def test_trajectory_decodes(rig):
@@ -236,10 +210,10 @@ def test_a_source_the_codec_rejects_is_a_500_problem_and_does_not_poison_the_lay
 
 
 def test_status_reports_the_new_seq_after_a_put(rig):
-    rig.maps.put("cloud", cloud_source(), 1.0)
-    rig.maps.put("cloud", cloud_source(), 2.0)
+    rig.maps.put("live", live_source(), 1.0)
+    rig.maps.put("live", live_source(), 2.0)
     rig.maps.put("grid", grid_source(), 2.0)
-    assert rig.get("/map").json()["seq"] == {**{name: 0 for name in LAYERS}, "cloud": 2, "grid": 1}
+    assert rig.get("/map").json()["seq"] == {**{name: 0 for name in LAYERS}, "live": 2, "grid": 1}
 
 
 def test_the_body_header_agrees_with_the_status(rig):
@@ -300,8 +274,8 @@ def test_status_json_has_exactly_the_contract_keys(rig):
 def test_get_map_is_the_demand_heartbeat_and_the_layer_routes_are_not(rig):
     now_s = NOW_NS / 1e9
     assert not rig.maps.wanted(now_s, 5.0)
-    rig.maps.put("cloud", cloud_source(), 1.0)
-    rig.get("/map/cloud")
+    rig.maps.put("live", live_source(), 1.0)
+    rig.get("/map/live")
     rig.get("/map/pose")
     rig.get("/map/grid")  # a 503, still no touch
     assert not rig.maps.wanted(now_s, 5.0)
@@ -367,8 +341,8 @@ def test_pose_works_without_a_map_store():
 def test_models_forbid_extra_fields_like_every_other_resource():
     ok = {"epoch": 1, "seq": {name: 0 for name in LAYERS}, "stats": {}}
     assert MapStatus.model_validate(ok).epoch == 1
-    for bad in ({**ok, "extra": 1}, {**ok, "seq": {**ok["seq"], "mesh": 0}}, {**ok, "epoch": -1},
-                {**ok, "epoch": 2**32}, {**ok, "seq": {**ok["seq"], "cloud": -1}}):
+    for bad in ({**ok, "extra": 1}, {**ok, "seq": {**ok["seq"], "cloud": 0}}, {**ok, "epoch": -1},
+                {**ok, "epoch": 2**32}, {**ok, "seq": {**ok["seq"], "live": -1}}):
         with pytest.raises(ValueError):
             MapStatus.model_validate(bad)
     with pytest.raises(ValueError):
@@ -392,7 +366,7 @@ def test_map_handlers_are_sync_so_encoding_runs_in_the_threadpool(rig):
 
 
 @pytest.mark.parametrize("tunable,value", [
-    ("cloud_point_budget", -1), ("cloud_spacing_m", 0.0), ("cloud_spacing_m", float("nan")), ("live_point_budget", -1),
+    ("live_spacing_m", 0.0), ("live_spacing_m", float("nan")), ("live_point_budget", -1),
 ])
 def test_bad_tunables_fail_at_construction(tunable, value):
     with pytest.raises(ValueError, match=tunable):

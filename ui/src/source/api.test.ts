@@ -20,7 +20,7 @@ const goal = { id: 'abc', state: 'executing', frameId: 'map', x: 3, y: 0, yaw: 0
 // MapStatus / Pose exactly as the gateway's map-json-contract.md serialises them.
 const mapStatus = () => ({
   epoch: 123456789,
-  seq: { cloud: 4, trajectory: 2, grid: 1, live: 0 },
+  seq: { trajectory: 2, grid: 1, live: 4 },
   stats: { keyframes: 12, depth_hz: 3.2, mode: 'mapping', calibration_placeholder: false, last_update_age_s: null },
 })
 const pose = () => ({ available: true, x: 1, y: 2, z: 0, qx: 0, qy: 0, qz: 0, qw: 1, ageS: 0.05 })
@@ -69,13 +69,13 @@ describe('gateway payload checks', () => {
 
 describe('map status and pose checks', () => {
   it('names the layers', () => {
-    expect([...LAYERS]).toEqual(['cloud', 'trajectory', 'grid', 'live'])
+    expect([...LAYERS]).toEqual(['trajectory', 'grid', 'live'])
   })
 
   it('accepts a valid map status, passing every stats key through', () => {
     const m = asMapStatus(mapStatus())
     expect(m?.epoch).toBe(123456789)
-    expect(m?.seq).toEqual({ cloud: 4, trajectory: 2, grid: 1, live: 0 })
+    expect(m?.seq).toEqual({ trajectory: 2, grid: 1, live: 4 })
     expect(m?.stats).toEqual({ keyframes: 12, depth_hz: 3.2, mode: 'mapping', calibration_placeholder: false, last_update_age_s: null })
   })
 
@@ -97,7 +97,7 @@ describe('map status and pose checks', () => {
       const { [layer]: _gone, ...rest } = mapStatus().seq
       expect(asMapStatus({ ...mapStatus(), seq: rest })).toBeNull()
     }
-    expect(asMapStatus({ ...mapStatus(), seq: { ...mapStatus().seq, cloud: '4' } })).toBeNull()
+    expect(asMapStatus({ ...mapStatus(), seq: { ...mapStatus().seq, live: '4' } })).toBeNull()
     expect(asMapStatus({ ...mapStatus(), seq: { ...mapStatus().seq, grid: null } })).toBeNull()
     expect(asMapStatus({ ...mapStatus(), seq: null })).toBeNull()
     expect(asMapStatus({ ...mapStatus(), seq: [] })).toBeNull()
@@ -167,7 +167,7 @@ describe('telemetry stream', () => {
 
 describe('binary fetch', () => {
   afterEach(() => vi.unstubAllGlobals())
-  const problem = { type: 'about:blank', title: 'No data yet', status: 503, detail: 'cloud has no data' }
+  const problem = { type: 'about:blank', title: 'No data yet', status: 503, detail: 'live has no data' }
   const stubFetch = (res: Response | Error) => {
     const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => {
       if (res instanceof Error) throw res
@@ -180,17 +180,17 @@ describe('binary fetch', () => {
   it('returns the body bytes on 200 and passes the URL and abort signal through', async () => {
     const fetchMock = stubFetch(new Response(new Uint8Array([1, 2, 3, 4]), { status: 200 }))
     const ctl = new AbortController()
-    const buf = await getBinary('/map/cloud', ctl.signal)
+    const buf = await getBinary('/map/live', ctl.signal)
     expect(buf).not.toBeNull()
     expect([...new Uint8Array(buf as ArrayBuffer)]).toEqual([1, 2, 3, 4])
     expect(fetchMock).toHaveBeenCalledTimes(1)
-    expect(fetchMock.mock.calls[0][0]).toBe(`${API_BASE}/map/cloud`)
+    expect(fetchMock.mock.calls[0][0]).toBe(`${API_BASE}/map/live`)
     expect(fetchMock.mock.calls[0][1]?.signal).toBe(ctl.signal)
   })
 
   it('returns null on 503 (layer has no data yet)', async () => {
     stubFetch(new Response(JSON.stringify(problem), { status: 503, headers: { 'Content-Type': 'application/problem+json' } }))
-    expect(await getBinary('/map/cloud', new AbortController().signal)).toBeNull()
+    expect(await getBinary('/map/live', new AbortController().signal)).toBeNull()
   })
 
   it('throws the gateway problem for any other failure', async () => {
@@ -199,13 +199,13 @@ describe('binary fetch', () => {
     expect(err).toBeInstanceOf(ApiError)
     expect((err as ApiError).problem).toMatchObject({ title: 'Not found', status: 404, detail: 'no such layer' })
     stubFetch(new Response('<html>', { status: 502 }))
-    const err2 = await getBinary('/map/cloud', new AbortController().signal).catch((e: unknown) => e)
+    const err2 = await getBinary('/map/live', new AbortController().signal).catch((e: unknown) => e)
     expect((err2 as ApiError).problem).toEqual({ title: 'HTTP 502', status: 502, detail: '' })
   })
 
   it('reports an unreachable gateway like every other request', async () => {
     stubFetch(new TypeError('Failed to fetch'))
-    const err = await getBinary('/map/cloud', new AbortController().signal).catch((e: unknown) => e)
+    const err = await getBinary('/map/live', new AbortController().signal).catch((e: unknown) => e)
     expect(err).toBeInstanceOf(ApiError)
     expect((err as ApiError).problem).toMatchObject({ title: 'Gateway unreachable', status: 0 })
   })
@@ -214,7 +214,7 @@ describe('binary fetch', () => {
     const ctl = new AbortController()
     stubFetch(new DOMException('aborted', 'AbortError'))
     ctl.abort()
-    const err = await getBinary('/map/cloud', ctl.signal).catch((e: unknown) => e)
+    const err = await getBinary('/map/live', ctl.signal).catch((e: unknown) => e)
     expect(err).not.toBeInstanceOf(ApiError)
     expect((err as DOMException).name).toBe('AbortError')
   })

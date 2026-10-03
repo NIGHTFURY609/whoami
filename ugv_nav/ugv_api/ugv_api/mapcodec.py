@@ -183,6 +183,17 @@ def _select_by_voxel_hash(xyz: np.ndarray, rgb: np.ndarray | None, spacing_m: fl
     return keep
 
 
+def _thin_by_voxel(xyz: np.ndarray, spacing_m: float, budget: int) -> np.ndarray:
+    """Indices of an even thinning: the first point (in input order) of every voxel of `spacing_m`, then, if
+    that is still over `budget`, every k-th of those. Unlike the lowest-hash cut it leaves no holes: every
+    occupied voxel of the scan is equally likely to stay, so a dense scan thins out evenly."""
+    _, first = np.unique(_voxel_hash(xyz, spacing_m), return_index=True)
+    first.sort()  # input order: the scan's row order, which the stride below spreads evenly
+    if len(first) > budget:
+        first = first[np.linspace(0, len(first) - 1, budget).astype(np.int64)]
+    return first
+
+
 def encode_cloud(
     xyz: np.ndarray,
     rgb: np.ndarray | None,
@@ -192,11 +203,15 @@ def encode_cloud(
     stamp_s: float,
     budget: int,
     spacing_m: float,
+    thin: bool = False,
 ) -> bytes:
     """UGVC. Drops non-finite points; if more than `budget` finite points remain, keeps `budget` of them by
     voxel hash (voxels of `spacing_m`: the lowest-hash voxels first), so the same point set always yields
     the same selection whatever its order. Kept points stay in input order. `source_count` is the finite
-    count before that cut; bbox is over the points written."""
+    count before that cut; bbox is over the points written.
+
+    `thin=True` (the live scan) replaces that cut: one point per voxel of `spacing_m` always, then an even
+    stride down to `budget` (see `_thin_by_voxel`)."""
     pts = np.asarray(xyz, dtype=np.float32)
     if pts.ndim != 2 or pts.shape[1] != 3:
         raise ValueError(f"xyz must have shape (N, 3), got {pts.shape}")
@@ -214,7 +229,11 @@ def encode_cloud(
         pts = pts[finite]
         col = None if col is None else col[finite]
     source_count = len(pts)
-    if source_count > budget:
+    if thin and source_count:
+        idx = _thin_by_voxel(pts, spacing, int(budget)) if budget else np.zeros(0, np.int64)
+        pts = pts[idx]
+        col = None if col is None else col[idx]
+    elif source_count > budget:
         if budget == 0:
             keep = np.zeros(source_count, dtype=bool)
         else:
