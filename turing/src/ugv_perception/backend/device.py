@@ -17,6 +17,27 @@ def intel_openvino_gpu_available() -> bool:
     return any(item == "GPU" or item.startswith("GPU.") for item in devices)
 
 
+def is_gpu_device(device: object) -> bool:
+    """True for an OpenVINO GPU or a CUDA device. CPU stays sequential."""
+    name = str(device or "").strip().upper()
+    if name.startswith("CPU"):
+        return False
+    return name.startswith("GPU") or name.startswith("CUDA") or name.startswith("NVIDIA")
+
+
+def can_overlap_gpu(adapter: object, depth: object) -> bool:
+    """Both nets are on a GPU, so the tick may start them together for one frame."""
+    if depth is None:
+        return False
+    mask_backend = getattr(getattr(adapter, "_inner", adapter), "_backend", None)
+    depth_backend = getattr(depth, "_backend", None)
+    if mask_backend is None or depth_backend is None:
+        return False
+    return is_gpu_device(getattr(mask_backend, "device", "")) and is_gpu_device(
+        getattr(depth_backend, "device", "")
+    )
+
+
 def cuda_available() -> bool:
     try:
         import torch

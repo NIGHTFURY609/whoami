@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import rclpy
@@ -13,6 +14,7 @@ from sensor_msgs.msg import CameraInfo, Image
 from std_msgs.msg import Bool, Float64MultiArray
 
 from ugv_perception.adapter.frame import ImageFrame
+from ugv_perception.backend.device import can_overlap_gpu
 from ugv_perception.compose.load import load_compose_configs
 from ugv_perception.ingest.msgs import CameraInfoView, ImageView
 from ugv_perception.ingest.ros_bridge import camera_info_msg_to_view, image_msg_to_view
@@ -126,6 +128,7 @@ class PerceptionAdapterNode(Node):
         self._pub_meta = self.create_publisher(Float64MultiArray, "/segmentation/port_meta", 10)
         self._pub_cinfo = self.create_publisher(CameraInfo, "/segmentation/camera_info", 10)
         self._depth = depth
+        self._depth_pool: ThreadPoolExecutor | None = None
         self._pub_cloud = None
         self._pub_depth = None
         if depth is not None:
@@ -144,6 +147,10 @@ class PerceptionAdapterNode(Node):
 
     def destroy_node(self) -> None:
         self._stop.set()
+        pool = getattr(self, "_depth_pool", None)
+        if pool is not None:
+            pool.shutdown(wait=False, cancel_futures=True)
+            self._depth_pool = None
         wd = getattr(self, "_watchdog", None)
         if wd is not None and wd.is_alive():
             wd.join(timeout=2.0)
@@ -172,6 +179,19 @@ class PerceptionAdapterNode(Node):
         had_pair = self._last_image is not None and self._last_info is not None
         # One decode per frame: segmentation and depth share this ImageFrame.
         frame = decode_cycle_frame(self._last_image, self._last_info)
+        depth_fut = None
+        if (
+            frame is not None
+            and self._last_info is not None
+            and can_overlap_gpu(self._adapter, self._depth)
+        ):
+            if self._depth_pool is None:
+                self._depth_pool = ThreadPoolExecutor(
+                    max_workers=1, thread_name_prefix="ugv_da3"
+                )
+            depth_fut = self._depth_pool.submit(
+                self._depth.maps, frame.rgb, self._last_info.k
+            )
         out = cycle_on_frame(
             frame=frame,
             now_ns=now_ns,
@@ -198,9 +218,51 @@ class PerceptionAdapterNode(Node):
             self._pub_meta.publish(wired.port_meta)
             if self._last_camera_info_msg is not None:
                 self._pub_cinfo.publish(self._last_camera_info_msg)
-            self._publish_depth(frame)
+            if depth_fut is not None:
+                self._emit_depth_future(frame, depth_fut)
+            else:
+                self._publish_depth(frame)
+        elif depth_fut is not None:
+            try:
+                depth_fut.result()
+            except Exception:
+                pass
         if had_pair and self._last_image is not None:
             self._inferred_stamp = self._last_image.stamp_ns
+
+    def _emit_depth_future(self, frame: ImageFrame | None, depth_fut: object) -> None:
+        try:
+            packed = depth_fut.result()
+        except Exception as exc:
+            self._note_depth_error(exc)
+            return
+        self._emit_depth(frame, packed)
+
+    def _emit_depth(self, frame: ImageFrame | None, packed: tuple[object, object]) -> None:
+        if frame is None:
+            return
+        try:
+            from ugv_perception.node.cloud import depth_to_image, points_to_cloud
+
+            depth_m, points = packed
+            if self._pub_depth is not None:
+                self._pub_depth.publish(
+                    depth_to_image(depth_m, frame.stamp_ns, frame.frame_id)
+                )
+            if points is not None and self._pub_cloud is not None:
+                self._pub_cloud.publish(
+                    points_to_cloud(points, frame.stamp_ns, frame.frame_id)
+                )
+        except Exception as exc:
+            self._note_depth_error(exc)
+
+    def _note_depth_error(self, exc: BaseException) -> None:
+        self.metrics.depth_errors += 1
+        n = self.metrics.depth_errors
+        if n == 1 or n % 100 == 0:
+            self.get_logger().warning(
+                f"depth failed ({n} so far), no depth for this frame: {exc!r}"
+            )
 
     def _publish_depth(self, frame: ImageFrame | None) -> None:
         """After the mask, on the frame the cycle already decoded.
@@ -224,10 +286,7 @@ class PerceptionAdapterNode(Node):
                     points_to_cloud(points, frame.stamp_ns, frame.frame_id)
                 )
         except Exception as exc:  # any backend failure; the frame's mask is already out
-            self.metrics.depth_errors += 1
-            n = self.metrics.depth_errors
-            if n == 1 or n % 100 == 0:
-                self.get_logger().warning(f"depth failed ({n} so far), no depth for this frame: {exc!r}")
+            self._note_depth_error(exc)
 
     def _watchdog_loop(self, period_s: float) -> None:
         max_age = float(self._fresh.perception_max_age)

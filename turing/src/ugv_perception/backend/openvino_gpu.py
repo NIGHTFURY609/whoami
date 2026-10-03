@@ -12,10 +12,21 @@ from ugv_perception.backend.instances import instances_from_engine
 
 _DEVICE = "GPU"
 _CPU = "CPU"
+_SHARED_CORE = None
 # Engine NMS (Ultralytics YOLO-seg defaults). Not T04 τ.
 _CONF_THRES = 0.25
 _IOU_THRES = 0.70
 _MAX_DET = 300
+
+
+def _shared_core() -> object:
+    """One Core for every tensor model so two GPU InferRequests can overlap."""
+    global _SHARED_CORE
+    import openvino as ov
+
+    if _SHARED_CORE is None:
+        _SHARED_CORE = ov.Core()
+    return _SHARED_CORE
 
 
 def _compile_gpu_then_cpu(
@@ -428,6 +439,10 @@ class OpenVinoGpuTensorBackend:
         self._pre = None
         self._pre_key: tuple | None = None
         self._fallback_logits: np.ndarray | None = None
+        self._req = None
+        self._in_flight = False
+        self._in_flight_input: np.ndarray | None = None
+        self._primed_blob: np.ndarray | None = None
         self.seg_post_disabled = False
         self.rgb_pre_disabled = False
         self.device = _DEVICE
@@ -440,7 +455,7 @@ class OpenVinoGpuTensorBackend:
             import openvino as ov
         except ImportError as exc:
             raise AdapterError("openvino is not installed") from exc
-        core = ov.Core()
+        core = _shared_core()
         try:
             model = core.read_model(str(path))
         except Exception as exc:
@@ -473,13 +488,12 @@ class OpenVinoGpuTensorBackend:
 
     def _compile(self) -> None:
         try:
-            from openvino import Type, properties
-
-            # FP32 on every backend: the GPU plugin would otherwise pick f16 on an f16-capable GPU (Arc) even
-            # for an FP32 IR.
-            self._compiled, self.device = _compile_gpu_then_cpu(
-                self._core, self._model, {properties.hint.inference_precision: Type.f32}
-            )
+            # Same compile as the GPU-pre + GPU-decode build: FP32 IR, plugin-default runtime.
+            # Pre and post graphs stay pinned f32. Do not set INFERENCE_PRECISION_HINT=f32 on the net.
+            self._compiled, self.device = _compile_gpu_then_cpu(self._core, self._model)
+            self._req = None
+            self._in_flight = False
+            self._in_flight_input = None
         except AdapterError:
             raise
         except Exception as exc:
@@ -567,6 +581,66 @@ class OpenVinoGpuTensorBackend:
         except Exception as exc:
             raise AdapterError("OpenVINO GPU run failed") from exc
 
+    def begin_run_all(self, blob: NDArray[np.float32]) -> None:
+        """Queue this model. wait_run_all() copies the outputs. One request per compiled model."""
+        if self._compiled is None:
+            raise AdapterError("OpenVinoGpuTensorBackend.load() was not called")
+        if not isinstance(blob, np.ndarray) or blob.dtype != np.float32 or blob.ndim != 4:
+            raise TypeError("blob must be float32 NCHW")
+        if self._in_flight:
+            raise AdapterError("OpenVINO request already in flight")
+        try:
+            if self._req is None:
+                self._req = self._compiled.create_infer_request()
+            self._in_flight_input = np.ascontiguousarray(blob)
+            self._req.start_async([self._in_flight_input])
+            self._in_flight = True
+        except AdapterError:
+            self._in_flight = False
+            self._in_flight_input = None
+            raise
+        except Exception as exc:
+            self._in_flight = False
+            self._in_flight_input = None
+            raise AdapterError("OpenVINO GPU run failed") from exc
+
+    def wait_run_all(self) -> list[np.ndarray]:
+        if self._req is None or not self._in_flight:
+            raise AdapterError("OpenVINO GPU run was not started")
+        try:
+            self._req.wait()
+            return [
+                np.array(self._req.get_output_tensor(i).data, copy=True)
+                for i in range(len(self._compiled.outputs))
+            ]
+        except AdapterError:
+            raise
+        except Exception as exc:
+            raise AdapterError("OpenVINO GPU run failed") from exc
+        finally:
+            self._in_flight = False
+            self._in_flight_input = None
+
+    def begin_run_all_from_rgb(
+        self,
+        rgb: NDArray[np.uint8],
+        sizes: tuple[tuple[int, int], ...],
+        mean: tuple[float, float, float],
+        std: tuple[float, float, float],
+    ) -> None:
+        blob = self._rgb_pre(rgb, sizes, mean, std, clip_255=True)
+        self.begin_run_all(blob)
+
+    def prime_seg_rgb(
+        self,
+        rgb: NDArray[np.uint8],
+        input_hw: tuple[int, int],
+        mean: tuple[float, float, float],
+        std: tuple[float, float, float],
+    ) -> None:
+        """Fill the RUGD input before either net is started."""
+        self._primed_blob = self._rgb_pre(rgb, (input_hw,), mean, std, clip_255=False)
+
     def run_seg_from_rgb(
         self,
         rgb: NDArray[np.uint8],
@@ -575,7 +649,11 @@ class OpenVinoGpuTensorBackend:
         mean: tuple[float, float, float],
         std: tuple[float, float, float],
     ) -> tuple[np.ndarray, np.ndarray]:
-        blob = self._rgb_pre(rgb, (input_hw,), mean, std, clip_255=False)
+        if self._primed_blob is not None:
+            blob = self._primed_blob
+            self._primed_blob = None
+        else:
+            blob = self._rgb_pre(rgb, (input_hw,), mean, std, clip_255=False)
         return self.run_seg(blob, out_hw)
 
     def run_all_from_rgb(

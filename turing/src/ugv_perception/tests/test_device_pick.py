@@ -11,8 +11,10 @@ from ugv_perception.adapter.rugd import load_rugd_config
 from ugv_perception.backend import device
 from ugv_perception.backend.cuda_pytorch import CudaPytorchTensorBackend
 from ugv_perception.backend.device import (
+    can_overlap_gpu,
     cuda_available,
     intel_openvino_gpu_available,
+    is_gpu_device,
     pick_tensor_backend,
 )
 
@@ -50,6 +52,29 @@ def test_device_py_has_no_module_level_vendor_imports() -> None:
             assert "openvino" not in line
             assert "torch" not in line
             assert "transformers" not in line
+
+
+def test_can_overlap_gpu_requires_both_on_gpu() -> None:
+    class _Gpu:
+        device = "GPU"
+
+    class _Cpu:
+        device = "CPU"
+
+    class _Cuda:
+        device = "cuda"
+
+    class _Adapter:
+        def __init__(self, backend: object) -> None:
+            self._backend = backend
+
+    assert is_gpu_device("GPU") and is_gpu_device("GPU.0") and is_gpu_device("cuda")
+    assert not is_gpu_device("CPU") and not is_gpu_device("")
+    assert can_overlap_gpu(_Adapter(_Gpu()), type("D", (), {"_backend": _Gpu()})())
+    assert can_overlap_gpu(_Adapter(_Cuda()), type("D", (), {"_backend": _Cuda()})())
+    assert not can_overlap_gpu(_Adapter(_Cpu()), type("D", (), {"_backend": _Cpu()})())
+    assert not can_overlap_gpu(_Adapter(_Gpu()), type("D", (), {"_backend": _Cpu()})())
+    assert not can_overlap_gpu(_Adapter(_Gpu()), None)
 
 
 def test_adapters_stay_vendor_neutral() -> None:
@@ -121,14 +146,17 @@ def test_pick_none_when_no_weights(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     assert pick_tensor_backend(ir_xml=xml, safetensors_dir=folder, kind="rugd") is None
 
 
-def test_openvino_networks_compile_pinned_to_fp32(monkeypatch: pytest.MonkeyPatch) -> None:
-    """FP32 on every backend: the GPU plugin would otherwise pick f16 on Arc even for an FP32 IR."""
-    ov = pytest.importorskip("openvino")
+def test_openvino_main_net_compile_has_no_runtime_precision_hint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """GPU pre/post stay f32. The live net compile is the plugin-default used for the 16/24 fps path."""
     from ugv_perception.backend import openvino_gpu
 
     seen: list[object] = []
     monkeypatch.setattr(
-        openvino_gpu, "_compile_gpu_then_cpu", lambda core, model, config: seen.append(config) or (None, "CPU")
+        openvino_gpu,
+        "_compile_gpu_then_cpu",
+        lambda core, model, config=None: seen.append(config) or (None, "CPU"),
     )
 
     class _Model:
@@ -139,7 +167,7 @@ def test_openvino_networks_compile_pinned_to_fp32(monkeypatch: pytest.MonkeyPatc
     backend._core, backend._model = object(), _Model()
     with pytest.raises(AssertionError, match="not reached"):
         backend._compile()
-    assert seen == [{ov.properties.hint.inference_precision: ov.Type.f32}]
+    assert seen == [None]
 
 
 def test_cuda_tensor_load_raises_without_cuda(

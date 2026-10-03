@@ -28,10 +28,11 @@ def _axis(n_src: int, n_dst: int, device: str) -> tuple[torch.Tensor, torch.Tens
     pos = half_pixel_positions(n_src, n_dst)
     i0 = np.floor(pos).astype(np.int64)
     i1 = np.minimum(i0 + 1, n_src - 1)
+    kwargs = {"non_blocking": True} if str(device).startswith("cuda") else {}
     return (
-        torch.from_numpy(i0).to(device),
-        torch.from_numpy(i1).to(device),
-        torch.from_numpy((pos - i0).astype(np.float32)).to(device),
+        torch.from_numpy(i0).to(device, **kwargs),
+        torch.from_numpy(i1).to(device, **kwargs),
+        torch.from_numpy((pos - i0).astype(np.float32)).to(device, **kwargs),
     )
 
 
@@ -62,7 +63,8 @@ def preprocess_nchw_gpu(rgb: np.ndarray, device: str) -> tuple[torch.Tensor, tup
     if rgb.dtype != np.uint8 or rgb.ndim != 3 or rgb.shape[2] != 3:
         raise TypeError("rgb must be uint8 HWC")
     first, second = two_step_hw(int(rgb.shape[0]), int(rgb.shape[1]))
-    image = torch.from_numpy(np.ascontiguousarray(rgb)).to(device)
+    kwargs = {"non_blocking": True} if str(device).startswith("cuda") else {}
+    image = torch.from_numpy(np.ascontiguousarray(rgb)).to(device, **kwargs)
     image = _resize_u8(_resize_u8(image, first), second)
     mean = torch.tensor(IMAGENET_MEAN, dtype=torch.float32, device=device).view(3, 1, 1)
     std = torch.tensor(IMAGENET_STD, dtype=torch.float32, device=device).view(3, 1, 1)

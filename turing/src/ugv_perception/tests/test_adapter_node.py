@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import time
+
 import pytest
 
 pytest.importorskip("rclpy")
@@ -118,6 +120,99 @@ def test_one_decode_per_frame_feeds_segmentation_and_depth(monkeypatch: pytest.M
         node._on_image(img)
         assert spy.calls == 1 and len(decodes) == 1, "one decode for the whole tick"
         assert len(depth.rgbs) == 1 and depth.rgbs[0] is decodes[0].rgb, "depth reuses the cycle's frame"
+    finally:
+        node.destroy_node()
+        if rclpy.ok():
+            rclpy.shutdown()
+
+
+@pytest.mark.parametrize("device", ["GPU", "cuda"])
+def test_gpu_overlap_runs_maps_during_compose(device: str) -> None:
+    """DA3 maps() starts while RUGD infer is still running. Same stamp. CPU stays sequential.
+
+    OpenVINO GPU and CUDA both use this pool. CUDA backends keep a private stream each so a
+    host copy waits only for that net.
+    """
+    import numpy as np
+
+    events: list[tuple[str, float]] = []
+
+    class _Gpu:
+        def __init__(self) -> None:
+            self.device = device
+
+    class _Depth:
+        _backend = _Gpu()
+
+        def maps(self, rgb, k):
+            events.append(("depth_start", time.perf_counter()))
+            time.sleep(0.06)
+            events.append(("depth_end", time.perf_counter()))
+            return np.ones(rgb.shape[:2], dtype=np.float32), np.zeros((0, 3), dtype=np.float32)
+
+    class _Adapter(SpyAdapter):
+        def __init__(self) -> None:
+            super().__init__()
+            self._backend = _Gpu()
+
+        def infer(self, frame):
+            events.append(("mask_start", time.perf_counter()))
+            time.sleep(0.06)
+            events.append(("mask_end", time.perf_counter()))
+            return super().infer(frame)
+
+    rclpy.init()
+    node = PerceptionAdapterNode(
+        adapter=_Adapter(), adapter_id="yoloe", now_ns_fn=lambda: _STAMP + 100_000_000, depth=_Depth()
+    )
+    try:
+        img, info = _msgs()
+        node._on_info(info)
+        node._on_image(img)
+        names = [name for name, _t in events]
+        assert "mask_start" in names and "depth_start" in names
+        starts = {name: t for name, t in events if name.endswith("_start")}
+        ends = {name: t for name, t in events if name.endswith("_end")}
+        assert starts["depth_start"] < ends["mask_end"]
+        assert node.metrics.masks_published == 1
+    finally:
+        node.destroy_node()
+        if rclpy.ok():
+            rclpy.shutdown()
+
+
+def test_cpu_pair_stays_sequential() -> None:
+    import numpy as np
+
+    events: list[str] = []
+
+    class _Cpu:
+        device = "CPU"
+
+    class _Depth:
+        _backend = _Cpu()
+
+        def begin_maps(self, rgb, k) -> None:
+            events.append("da3_start")
+
+        def maps(self, rgb, k):
+            events.append("sequential")
+            return np.ones(rgb.shape[:2], dtype=np.float32), np.zeros((0, 3), dtype=np.float32)
+
+    class _Adapter(SpyAdapter):
+        def __init__(self) -> None:
+            super().__init__()
+            self._backend = _Cpu()
+
+    rclpy.init()
+    node = PerceptionAdapterNode(
+        adapter=_Adapter(), adapter_id="yoloe", now_ns_fn=lambda: _STAMP + 100_000_000, depth=_Depth()
+    )
+    try:
+        img, info = _msgs()
+        node._on_info(info)
+        node._on_image(img)
+        assert events == ["sequential"]
     finally:
         node.destroy_node()
         if rclpy.ok():

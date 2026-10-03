@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 from pathlib import Path
 
 import numpy as np
@@ -35,6 +36,10 @@ class CudaPytorchTensorBackend:
         self.rgb_pre_disabled = False
         # Every tensor this backend creates, and the model it loads, goes to this device.
         self.device = "cuda"
+        self._stream = None
+        self._pending: list | None = None
+        self._pending_depth = None
+        self._primed_tensor = None
 
     def load(self, weights_path: str, kind: str = "rugd") -> None:
         path = Path(weights_path)
@@ -60,6 +65,19 @@ class CudaPytorchTensorBackend:
         except Exception as exc:
             raise AdapterError("CUDA load failed") from exc
         self._kind = kind
+        if torch.cuda.is_available():
+            self._stream = torch.cuda.Stream()
+
+    def _cuda_stream(self):
+        """Bind this net's stream. A second backend (RUGD vs DA3) has its own stream, so a
+        host copy on the pool thread waits only for that net and the other can keep running.
+        """
+        import torch
+
+        if self._stream is None:
+            return contextlib.nullcontext()
+        torch.cuda.set_device(self._stream.device_index)
+        return torch.cuda.stream(self._stream)
 
     def ensure_hw(self, height: int, width: int) -> None:
         if self._model is None:
@@ -88,8 +106,48 @@ class CudaPytorchTensorBackend:
         mean: tuple[float, float, float],
         std: tuple[float, float, float],
     ) -> tuple[np.ndarray, np.ndarray]:
-        tensor = self._rgb_pre_cuda(rgb, (input_hw,), mean, std, clip_255=False)
+        if self._primed_tensor is not None:
+            tensor = self._primed_tensor
+            self._primed_tensor = None
+        else:
+            tensor = self._rgb_pre_cuda(rgb, (input_hw,), mean, std, clip_255=False)
         return self._run_seg_tensor(tensor, out_hw)
+
+    def prime_seg_rgb(
+        self,
+        rgb: NDArray[np.uint8],
+        input_hw: tuple[int, int],
+        mean: tuple[float, float, float],
+        std: tuple[float, float, float],
+    ) -> None:
+        """Fill the RUGD input on this stream before either net is started."""
+        self._primed_tensor = self._rgb_pre_cuda(rgb, (input_hw,), mean, std, clip_255=False)
+
+    def begin_run_all_from_rgb(
+        self,
+        rgb: NDArray[np.uint8],
+        sizes: tuple[tuple[int, int], ...],
+        mean: tuple[float, float, float],
+        std: tuple[float, float, float],
+    ) -> None:
+        tensor = self._rgb_pre_cuda(rgb, sizes, mean, std, clip_255=True)
+        self._begin_forward(tensor)
+
+    def begin_run_all(self, blob: NDArray[np.float32]) -> None:
+        self._begin_forward(self._blob_to_cuda(blob))
+
+    def wait_run_all(self) -> list[np.ndarray]:
+        if self._pending is None:
+            raise AdapterError("CUDA run was not started")
+        try:
+            with self._cuda_stream():
+                return [tensor.detach().cpu().numpy() for tensor in self._pending]
+        except AdapterError:
+            raise
+        except Exception as exc:
+            raise AdapterError("CUDA run failed") from exc
+        finally:
+            self._pending = None
 
     def run_all(self, blob: NDArray[np.float32]) -> list[np.ndarray]:
         tensor = self._blob_to_cuda(blob)
@@ -114,7 +172,8 @@ class CudaPytorchTensorBackend:
             import torch
         except ImportError as exc:
             raise AdapterError("torch is not installed") from exc
-        return torch.from_numpy(blob).to(self.device)
+        with self._cuda_stream():
+            return torch.from_numpy(blob).to(self.device)
 
     def _rgb_pre_cuda(
         self,
@@ -138,9 +197,9 @@ class CudaPytorchTensorBackend:
         except ImportError as exc:
             raise AdapterError("torch is not installed") from exc
         try:
-            tensor = torch.from_numpy(np.ascontiguousarray(rgb)).to(self.device)
-            tensor = tensor.permute(2, 0, 1).unsqueeze(0).to(dtype=torch.float32)
-            with torch.inference_mode():
+            with self._cuda_stream(), torch.inference_mode():
+                tensor = torch.from_numpy(np.ascontiguousarray(rgb)).to(self.device)
+                tensor = tensor.permute(2, 0, 1).unsqueeze(0).to(dtype=torch.float32)
                 for oh, ow in sizes:
                     th, tw = int(oh), int(ow)
                     if (int(tensor.shape[-2]), int(tensor.shape[-1])) != (th, tw):
@@ -172,7 +231,7 @@ class CudaPytorchTensorBackend:
             raise AdapterError("torch is not installed") from exc
         logits = None
         try:
-            with torch.inference_mode():
+            with self._cuda_stream(), torch.inference_mode():
                 logits = self._model(pixel_values=tensor).logits
                 if not torch.isfinite(logits).all():
                     raise AdapterError("RUGD logits are not finite")
@@ -204,19 +263,30 @@ class CudaPytorchTensorBackend:
             import torch
         except ImportError as exc:
             raise AdapterError("torch is not installed") from exc
+        self._begin_forward(tensor)
+        return self.wait_run_all()
+
+    def _begin_forward(self, tensor: object) -> None:
+        if self._model is None or self._kind is None:
+            raise AdapterError("CudaPytorchTensorBackend.load() was not called")
+        if self._pending is not None:
+            raise AdapterError("CUDA run already in flight")
         try:
-            with torch.inference_mode():
+            import torch
+        except ImportError as exc:
+            raise AdapterError("torch is not installed") from exc
+        try:
+            with self._cuda_stream(), torch.inference_mode():
                 if self._kind == "rugd":
-                    logits = self._model(pixel_values=tensor).logits
-                    return [logits.detach().cpu().numpy()]
-                depth, sky = self._model(tensor)
-                return [
-                    depth.detach().cpu().numpy(),
-                    sky.detach().cpu().numpy(),
-                ]
+                    self._pending = [self._model(pixel_values=tensor).logits]
+                else:
+                    depth, sky = self._model(tensor)
+                    self._pending = [depth, sky]
         except AdapterError:
+            self._pending = None
             raise
         except Exception as exc:
+            self._pending = None
             raise AdapterError("CUDA run failed") from exc
 
     def run_depth_metres(
@@ -241,19 +311,61 @@ class CudaPytorchTensorBackend:
         except ImportError as exc:
             raise AdapterError("torch is not installed") from exc
         try:
+            self.begin_depth_metres(rgb, focal, model_size, out_hw)
+            return self.wait_depth_metres()
+        except AdapterError:
+            raise
+        except Exception as exc:
+            raise AdapterError("CUDA run failed") from exc
+
+    def begin_depth_metres(
+        self,
+        rgb: NDArray[np.uint8],
+        focal: float,
+        model_size: tuple[int, int],
+        out_hw: tuple[int, int],
+    ) -> None:
+        """Queue DA3 pre, the net, and hole-safe on this stream. wait_depth_metres() copies."""
+        if self._model is None or self._kind != "da3":
+            raise AdapterError("run_depth_metres needs a loaded DA3 model")
+        if self._pending_depth is not None:
+            raise AdapterError("DA3 CUDA run already in flight")
+        try:
+            import torch
+
+            from ugv_perception.depth import geometry_gpu
+        except ImportError as exc:
+            raise AdapterError("torch is not installed") from exc
+        try:
             self.ensure_hw(*model_size)
-            with torch.inference_mode():
+            with self._cuda_stream(), torch.inference_mode():
                 blob, sized = geometry_gpu.preprocess_nchw_gpu(rgb, self.device)
                 if sized != tuple(model_size):
                     raise AdapterError("preprocess size disagrees with K_model")
                 depth, sky = self._model(blob)
                 metres = depth[0].float() * (float(focal) / METRIC_SCALE)
-                on_camera = geometry_gpu.hole_safe_resize_gpu(metres, sky[0], tuple(out_hw))
-                return on_camera.cpu().numpy()
+                self._pending_depth = geometry_gpu.hole_safe_resize_gpu(
+                    metres, sky[0], tuple(out_hw)
+                )
+        except AdapterError:
+            self._pending_depth = None
+            raise
+        except Exception as exc:
+            self._pending_depth = None
+            raise AdapterError("CUDA run failed") from exc
+
+    def wait_depth_metres(self) -> NDArray[np.float32]:
+        if self._pending_depth is None:
+            raise AdapterError("CUDA depth was not started")
+        try:
+            with self._cuda_stream():
+                return self._pending_depth.cpu().numpy()
         except AdapterError:
             raise
         except Exception as exc:
             raise AdapterError("CUDA run failed") from exc
+        finally:
+            self._pending_depth = None
 
 
 def _load_rugd(path: Path, device: str) -> object:

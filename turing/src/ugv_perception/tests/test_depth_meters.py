@@ -451,6 +451,33 @@ def test_the_cuda_backend_has_no_half_precision_path() -> None:
         assert word not in source, word
 
 
+def test_cuda_hot_paths_use_a_private_stream() -> None:
+    """RUGD and DA3 each own a stream so a host copy on one thread does not wait for the other net."""
+    from ugv_perception.backend import cuda_pytorch
+
+    source = Path(cuda_pytorch.__file__).read_text(encoding="utf-8")
+    assert "torch.cuda.Stream()" in source
+    for name in ("_rgb_pre_cuda", "_run_seg_tensor", "begin_depth_metres", "wait_depth_metres", "_blob_to_cuda"):
+        assert name in source
+    assert source.count("_cuda_stream()") >= 5
+
+
+def test_cuda_rugd_and_da3_backends_get_distinct_streams() -> None:
+    torch = pytest.importorskip("torch")
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA is not available")
+    from ugv_perception.backend.cuda_pytorch import CudaPytorchTensorBackend
+
+    rugd, da3 = CudaPytorchTensorBackend(), CudaPytorchTensorBackend()
+    rugd._stream = torch.cuda.Stream()
+    da3._stream = torch.cuda.Stream()
+    assert rugd._stream is not da3._stream
+    with rugd._cuda_stream():
+        assert torch.cuda.current_stream() == rugd._stream
+    with da3._cuda_stream():
+        assert torch.cuda.current_stream() == da3._stream
+
+
 class _StubOut:
     def __init__(self, logits) -> None:
         self.logits = logits

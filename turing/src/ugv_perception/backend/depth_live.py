@@ -26,6 +26,9 @@ class DepthChannel:
     def __init__(self, backend: object) -> None:
         self._backend = backend
         self._metres_disabled = False  # sticky, like the backends' rgb_pre_disabled
+        self._pending_mode: str | None = None
+        self._pending_geom: tuple[np.ndarray, int, int, np.ndarray] | None = None
+        self._pending_outputs: list | None = None
 
     def maps(self, rgb: np.ndarray, k: tuple[float, ...] | np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         """Camera-sized meters (NaN holes) and unorganized XYZ. One infer, FP32 on every backend.
@@ -73,6 +76,77 @@ class DepthChannel:
         depth_m = meters_from_raw(raw, focal_model(k_m))
         on_camera = hole_safe_resize(depth_m, sky, (height, width)).astype(np.float32)
         return on_camera, backproject(on_camera, k_cam)
+
+    def begin_maps(self, rgb: np.ndarray, k: tuple[float, ...] | np.ndarray) -> None:
+        """Fill DA3 and start it. finish_maps() waits. maps() stays the sequential path."""
+        if self._pending_mode is not None:
+            raise AdapterError("DA3 maps already in flight")
+        if rgb.dtype != np.uint8 or rgb.ndim != 3 or rgb.shape[2] != 3:
+            raise TypeError("rgb must be uint8 HWC")
+        k_cam = np.asarray(k, dtype=np.float64).reshape(3, 3)
+        height, width = int(rgb.shape[0]), int(rgb.shape[1])
+        k_m, (mh, mw) = k_model(k_cam, (height, width))
+        if model_hw(height, width) != (mh, mw):
+            raise AdapterError("model size disagrees with K_model")
+        begin_m = getattr(self._backend, "begin_depth_metres", None)
+        if callable(begin_m) and not self._metres_disabled:
+            try:
+                begin_m(rgb, focal_model(k_m), (mh, mw), (height, width))
+                self._pending_geom = (k_cam, height, width, k_m)
+                self._pending_mode = "metres"
+                return
+            except AdapterError:
+                self._metres_disabled = True
+        self._backend.ensure_hw(mh, mw)
+        first, second = two_step_hw(height, width)
+        if second != (mh, mw):
+            raise AdapterError("preprocess size disagrees with K_model")
+        begin_rgb = getattr(self._backend, "begin_run_all_from_rgb", None)
+        if callable(begin_rgb) and not getattr(self._backend, "rgb_pre_disabled", False):
+            try:
+                begin_rgb(rgb, (first, second), MEAN, STD)
+                self._pending_geom = (k_cam, height, width, k_m)
+                self._pending_mode = "net"
+                return
+            except AdapterError:
+                if not getattr(self._backend, "rgb_pre_disabled", False):
+                    raise
+        blob, sized = preprocess_nchw(rgb)
+        if sized != (mh, mw):
+            raise AdapterError("preprocess size disagrees with K_model")
+        begin_run = getattr(self._backend, "begin_run_all", None)
+        if callable(begin_run):
+            begin_run(blob)
+            self._pending_mode = "net"
+        else:
+            self._pending_outputs = self._backend.run_all(blob)
+            self._pending_mode = "outputs"
+        self._pending_geom = (k_cam, height, width, k_m)
+
+    def finish_maps(self) -> tuple[np.ndarray, np.ndarray]:
+        if self._pending_geom is None or self._pending_mode is None:
+            raise AdapterError("begin_maps was not called")
+        k_cam, height, width, k_m = self._pending_geom
+        mode = self._pending_mode
+        try:
+            if mode == "metres":
+                on_camera = self._backend.wait_depth_metres()
+                return on_camera, backproject(on_camera, k_cam)
+            if mode == "net":
+                outputs = self._backend.wait_run_all()
+            else:
+                outputs = self._pending_outputs
+            if outputs is None or len(outputs) < 2:
+                raise AdapterError("DA3 must return depth_raw and sky")
+            raw = np.squeeze(outputs[0])
+            sky = np.squeeze(outputs[1])
+            depth_m = meters_from_raw(raw, focal_model(k_m))
+            on_camera = hole_safe_resize(depth_m, sky, (height, width)).astype(np.float32)
+            return on_camera, backproject(on_camera, k_cam)
+        finally:
+            self._pending_mode = None
+            self._pending_geom = None
+            self._pending_outputs = None
 
     def points(self, rgb: np.ndarray, k: tuple[float, ...] | np.ndarray) -> np.ndarray:
         return self.maps(rgb, k)[1]
