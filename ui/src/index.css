@@ -450,3 +450,19 @@ code { font-size: 10px; color: var(--text); overflow-wrap: anywhere; }
   .mapview { border-bottom: 1px solid var(--line-strong); }
   .mapview-insets { width: clamp(120px, 30%, 220px); }
 }
+
+/* Video replay panel (VideoPanel.tsx) */
+.video-state { display: flex; align-items: center; gap: 10px; font-size: 11px; }
+.video-badge { padding: 2px 8px; border: 1px solid var(--line-strong); font-weight: 700; letter-spacing: 0.12em; color: var(--dim); }
+.video-badge.playing { border-color: var(--accent); color: var(--accent); }
+.video-badge.buffering { border-color: var(--yellow); color: var(--yellow); animation: video-pulse 1s var(--ease) infinite alternate; }
+.video-badge.paused, .video-badge.ended { border-color: var(--orange); color: var(--orange); }
+@keyframes video-pulse { from { opacity: 1; } to { opacity: 0.45; } }
+@media (prefers-reduced-motion: reduce) { .video-badge.buffering { animation: none; } }
+.dim-inline { color: var(--dim); font-variant-numeric: tabular-nums; }
+.video-progress { height: 4px; background: var(--line); }
+.video-progress span { display: block; height: 100%; background: var(--accent); transition: width 0.4s linear; }
+.video-buttons { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.video-sync { display: flex; gap: 8px; align-items: flex-start; font-size: 11px; color: var(--text); cursor: pointer; }
+.video-sync input { margin-top: 2px; accent-color: var(--accent); }
+.video-sub { margin: 6px 0 0; font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--dim); font-weight: 600; }

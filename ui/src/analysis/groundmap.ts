@@ -99,16 +99,72 @@ function groundGrid(rawMask: Uint8Array, fx: number, fy: number, cx: number, vh:
   return inflated
 }
 
+// Min-heap of (distance, cell) for findPath. Entries are never updated in place: a cell pushed again with a lower
+// distance leaves a stale entry behind, skipped on pop (already done, or no longer its current distance).
+class CellHeap {
+  private d: number[] = []
+  private c: number[] = []
+
+  private less(a: number, b: number): boolean {
+    return this.d[a] < this.d[b] || (this.d[a] === this.d[b] && this.c[a] < this.c[b])
+  }
+
+  private swap(a: number, b: number): void {
+    ;[this.d[a], this.d[b]] = [this.d[b], this.d[a]]
+    ;[this.c[a], this.c[b]] = [this.c[b], this.c[a]]
+  }
+
+  push(dist: number, cell: number): void {
+    this.d.push(dist)
+    this.c.push(cell)
+    for (let i = this.d.length - 1; i > 0;) {
+      const p = (i - 1) >> 1
+      if (!this.less(i, p)) break
+      this.swap(i, p)
+      i = p
+    }
+  }
+
+  // The undone cell with the lowest current distance (ties: lowest index), or -1.
+  pop(done: Uint8Array, dist: Float32Array): number {
+    while (this.d.length > 0) {
+      const dist0 = this.d[0]
+      const cell = this.c[0]
+      const lastD = this.d.pop()!
+      const lastC = this.c.pop()!
+      if (this.d.length > 0) {
+        this.d[0] = lastD
+        this.c[0] = lastC
+        for (let i = 0; ;) {
+          const l = 2 * i + 1
+          const r = l + 1
+          let m = i
+          if (l < this.d.length && this.less(l, m)) m = l
+          if (r < this.d.length && this.less(r, m)) m = r
+          if (m === i) break
+          this.swap(i, m)
+          i = m
+        }
+      }
+      if (!done[cell] && dist0 === dist[cell]) return cell
+    }
+    return -1
+  }
+}
+
 export function findPath(grid: Uint8Array): { x: number; z: number }[] {
   const start = (TW - 1) / 2
   const dist = new Float32Array(TW * TH).fill(Infinity)
   const prev = new Int32Array(TW * TH).fill(-1)
   const done = new Uint8Array(TW * TH)
   dist[start] = 0
+  // Dijkstra on a binary heap keyed (distance, cell index): it pops cells in exactly the order a scan for the lowest
+  // distance (ties: lowest index) would, so the path is the same, at O(n log n) instead of O(n^2) per frame.
+  const heap = new CellHeap()
+  heap.push(0, start)
 
   for (;;) {
-    let cur = -1
-    for (let i = 0; i < dist.length; i++) if (!done[i] && dist[i] < Infinity && (cur < 0 || dist[i] < dist[cur])) cur = i
+    const cur = heap.pop(done, dist)
     if (cur < 0) break
     done[cur] = 1
     const cz = Math.floor(cur / TW), cxg = cur % TW
@@ -119,7 +175,11 @@ export function findPath(grid: Uint8Array): { x: number; z: number }[] {
         const ni = z * TW + x
         if (grid[ni] === 2) continue
         const step = (dz !== 0 && dx !== 0 ? 1.414 : 1) * (grid[ni] === 0 ? 1 : 6)
-        if (dist[cur] + step < dist[ni]) { dist[ni] = dist[cur] + step; prev[ni] = cur }
+        if (dist[cur] + step < dist[ni]) {
+          dist[ni] = dist[cur] + step
+          prev[ni] = cur
+          heap.push(dist[ni], ni) // the stored (float32) distance, the one the scan compared
+        }
       }
     }
   }

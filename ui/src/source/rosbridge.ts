@@ -41,7 +41,10 @@ function isValidK(k: unknown): k is number[] {
   return k[0] > 0 && k[4] > 0 && k[2] > 0 && k[5] > 0
 }
 
-export function connectRos(opts: RosOptions, cb: RosCallbacks): () => void {
+// `paired`: every camera frame, mask and depth image is wanted (a replayed video shown frame by frame with its own
+// overlay, framesync.ts), so nothing is throttled; the replay's own pace (one frame per perception cycle) bounds it.
+export function connectRos(opts: RosOptions, cb: RosCallbacks, paired = false): () => void {
+  const throttle = (ms: number) => ({ throttle_rate: paired ? 0 : ms, queue_length: paired ? 5 : 1 })
   let ws: WebSocket | null = null
   let closed = false
   let reconnectTimer: number | undefined
@@ -144,13 +147,13 @@ export function connectRos(opts: RosOptions, cb: RosCallbacks): () => void {
     ws.onopen = () => {
       reconnectAttempts = 0
       cb.onStatus(`ROS 2 connected ${opts.url}`, true)
-      sub(opts.imageTopic, 'sensor_msgs/msg/CompressedImage', { throttle_rate: 200, queue_length: 1 })
+      sub(opts.imageTopic, 'sensor_msgs/msg/CompressedImage', throttle(200))
       sub(opts.infoTopic, 'sensor_msgs/msg/CameraInfo')
       // Dev 1 Perception Port: degraded flag + the mask / depth the analyzer is built from
       sub('/ugv/perception_degraded', 'std_msgs/msg/Bool')
       sub('/segmentation/port_meta', 'std_msgs/msg/Float64MultiArray')
-      sub('/segmentation/mask', 'sensor_msgs/msg/Image', { throttle_rate: 200, queue_length: 1 })
-      sub('/perception/depth/image', 'sensor_msgs/msg/Image', { throttle_rate: 500, queue_length: 1 })
+      sub('/segmentation/mask', 'sensor_msgs/msg/Image', throttle(200))
+      sub('/perception/depth/image', 'sensor_msgs/msg/Image', throttle(500))
     }
 
     ws.onerror = () => cb.onStatus(`cannot reach ${opts.url}`, false)

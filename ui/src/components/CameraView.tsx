@@ -3,7 +3,7 @@ import { analyzerFor } from '../source/useCameraSource'
 import type { Layers } from '../types'
 import { Viewport } from './Viewport'
 
-const SOURCE_LABEL = { ros2: 'robot camera', camera: 'browser camera', upload: 'photo' } as const
+const SOURCE_LABEL = { ros2: 'robot camera', camera: 'browser camera', upload: 'photo', recording: 'recorded video' } as const
 const LAYER_KEYS: (keyof Layers)[] = ['image', 'mask', 'depth', 'path']
 
 // The main page: the camera with Dev 1's mask / depth / path overlay. Display only: nothing here commands motion.

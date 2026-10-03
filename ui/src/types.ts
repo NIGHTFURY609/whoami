@@ -9,7 +9,7 @@ export const Z_MIN = 2.0 // ground distance of the first top-down row
 export const CAM_H = 0.8 // assumed camera height above ground (m)
 export const PERCEPTION_MAX_AGE_MS = 500 // safety_timeouts.yaml, perception mask
 
-export type SourceKind = 'upload' | 'camera' | 'ros2'
+export type SourceKind = 'upload' | 'camera' | 'ros2' | 'recording'
 
 export const CLASS_NAMES = ['UNKNOWN', 'TRAVERSABLE', 'HAZARD'] as const
 export const CLASS_RGB: [number, number, number][] = [

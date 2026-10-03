@@ -16,3 +16,7 @@ __pycache__/
 # Owner's reference screenshots: local only, never committed (PR #40 review)
 /Screenshot *.png
 /docs/Screenshot *.png
+
+# recorded video overlays (webcam_stream.py --video)
+*.overlays/
+TEST.mp4
