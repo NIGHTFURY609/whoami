@@ -15,7 +15,8 @@
 [![Status](https://img.shields.io/badge/status-testing%20mode-orange)](#status)
 
 <!-- TODO: replace with the hero GIF, e.g. docs/media/hero.gif -->
-<img src="https://placehold.co/900x420/0d1117/8b949e?text=HERO+GIF%0Alive+camera+%2B+mask+overlay+%7C+3D+height+map" width="90%" alt="Hero GIF placeholder">
+<img src="" width="90%" alt="Hero GIF placeholder">
+<img src="<img width="597" height="448" alt="segmentation-ex-5" <img src="https://github.com/user-attachments/assets/b0b6acc8-402b-4d2a-9b78-831638cec1b8" width="48%" alt="Live camera with the Perception Port mask overlay">&nbsp;<img src="https://github.com/user-attachments/assets/755ac146-b989-4aaa-8ee5-3ac670946efe" width="48%" alt="Live depth scan as a rolling 3-D height map">
 
 *Left: live camera with the Perception Port drawn over it. Right: the live depth scan as a rolling 3-D height map.*
 
