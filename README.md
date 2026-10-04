@@ -1,16 +1,27 @@
+<div align="center">
+
 # whoami
 
-**Camera-primary autonomous navigation for GPS-denied outdoor UGVs.**
+### Camera-primary autonomous navigation for GPS-denied outdoor UGVs
 
-One camera goes in and a safe `/cmd_vel` comes out. The robot drives from point A to point B with no GPS. The vision model is a pluggable sensor, never the brain.
+*One camera in, a safe `/cmd_vel` out. Point A to Point B with no GPS, where the vision model is a pluggable sensor and never the brain.*
 
-![ROS 2 Lyrical](https://img.shields.io/badge/ROS_2-Lyrical_Luth-22314E?style=flat-square&logo=ros)
-![Nav2](https://img.shields.io/badge/Nav2-Smac2D_+_RPP-1f6feb?style=flat-square)
-![RTAB-Map](https://img.shields.io/badge/SLAM-RTAB--Map-6f42c1?style=flat-square)
-![Status](https://img.shields.io/badge/status-testing-f59e0b?style=flat-square)
+[![ROS 2 Lyrical](https://img.shields.io/badge/ROS%202-Lyrical%20Luth-22314E?logo=ros)](https://docs.ros.org/)
+[![Nav2](https://img.shields.io/badge/Nav2-Smac2D%20%2B%20RPP-1f6feb)](https://docs.nav2.org/)
+[![RTAB-Map](https://img.shields.io/badge/SLAM-RTAB--Map%20RGB--D-6f42c1)](https://introlab.github.io/rtabmap/)
+[![PyTorch](https://img.shields.io/badge/PyTorch-CUDA-ee4c2c?logo=pytorch&logoColor=white)](https://pytorch.org/)
+[![OpenVINO](https://img.shields.io/badge/OpenVINO-Intel%20Arc-0071c5)](https://docs.openvino.ai/)
+[![React](https://img.shields.io/badge/UI-React%2019%20%2B%20three.js-61dafb?logo=react&logoColor=black)](ui/)
+[![Status](https://img.shields.io/badge/status-testing%20mode-orange)](#status)
 
-<!-- TODO: hero GIF, e.g. docs/media/hero.gif -->
-![Hero GIF placeholder](https://placehold.co/1200x500/161b22/8b949e?text=Hero+GIF)
+<!-- TODO: replace with the hero GIF, e.g. docs/media/hero.gif -->
+<img src="https://placehold.co/900x420/0d1117/8b949e?text=HERO+GIF%0Alive+camera+%2B+mask+overlay+%7C+3D+height+map" width="90%" alt="Hero GIF placeholder">
+
+*Left: live camera with the Perception Port drawn over it. Right: the live depth scan as a rolling 3-D height map.*
+
+</div>
+
+---
 
 > [!NOTE]
 > This is a software stack. So far it has run on a laptop with a webcam, a phone camera and a recorded RC-car video, not on a physical robot.
