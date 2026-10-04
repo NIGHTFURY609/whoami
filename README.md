@@ -8,6 +8,8 @@
 
 [![IRL tested](https://img.shields.io/badge/%E2%9C%94%20FIELD%20TESTED-Outdoor_Forest_Environment%20%C2%B7%20Kerala%20%C2%B7%203%20Oct%202026-2ea44f?style=for-the-badge)](#test-setup)
 
+[![SIH 2026](https://img.shields.io/badge/Smart%20India%20Hackathon%202026-SIH26126-1e4d8c?style=for-the-badge)](#smart-india-hackathon-2026)
+
 [![ROS 2 Lyrical](https://img.shields.io/badge/ROS%202-Lyrical%20Luth-22314E?logo=ros)](https://docs.ros.org/)
 [![Nav2](https://img.shields.io/badge/Nav2-Smac2D%20%2B%20RPP-1f6feb)](https://docs.nav2.org/)
 [![RTAB-Map](https://img.shields.io/badge/SLAM-RTAB--Map%20RGB--D-6f42c1)](https://introlab.github.io/rtabmap/)
@@ -25,10 +27,10 @@
 ---
 ## Contents
 
+- [Smart India Hackathon 2026](#smart-india-hackathon-2026)
 - [At a glance](#at-a-glance)
 - [Demo](#demo)
 - [How it works](#how-it-works)
-- [Rules the system never breaks](#rules-the-system-never-breaks)
 - [Built with](#built-with)
 - [Test setup](#test-setup)
 - [Resource usage](#resource-usage)
@@ -42,6 +44,16 @@
 
 > [!NOTE]
 > **Field tested outdoors.** A mobile phone streamed its camera to a laptop through a tunnel, and the laptop ran the whole stack live: perception, SLAM, planning and the safety gate. See [Test setup](#test-setup).
+
+## Smart India Hackathon 2026
+
+| | |
+|---|---|
+| **Problem Statement ID** | SIH26126 |
+| **Problem Statement Title** | Vision-Based Autonomous Navigation for Unmanned Ground Vehicle for Outdoor Environment |
+| **Theme** | Smart Automation |
+| **PS Category** | Software |
+| **Team Name** | WHOAMI |
 
 <br>
 
