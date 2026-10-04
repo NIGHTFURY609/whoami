@@ -6,6 +6,8 @@
 
 *Point A to Point B with no GPS, where the vision model is a pluggable sensor and never the brain.*
 
+[![IRL tested](https://img.shields.io/badge/%E2%9C%94%20OUTDOOR_REAL_LIFE%20TESTED-Outdoors%20%C2%B7%20Kerala%20%C2%B7%203%20Oct%202026-2ea44f?style=for-the-badge)](#test-setup)
+
 [![ROS 2 Lyrical](https://img.shields.io/badge/ROS%202-Lyrical%20Luth-22314E?logo=ros)](https://docs.ros.org/)
 [![Nav2](https://img.shields.io/badge/Nav2-Smac2D%20%2B%20RPP-1f6feb)](https://docs.nav2.org/)
 [![RTAB-Map](https://img.shields.io/badge/SLAM-RTAB--Map%20RGB--D-6f42c1)](https://introlab.github.io/rtabmap/)
@@ -14,7 +16,6 @@
 [![React](https://img.shields.io/badge/UI-React%2019%20%2B%20three.js-61dafb?logo=react&logoColor=black)](ui/)
 [![Status](https://img.shields.io/badge/status-testing%20mode-orange)](#status)
 
-<!-- TODO: replace with the hero GIF, e.g. docs/media/hero.gif -->
 <img src="docs/segmentation-ex-5.gif" width="48%" alt="Live camera with the Perception Port mask overlay">&nbsp;<img src="docs/3d-ex.gif" width="48%" alt="Live depth scan as a rolling 3-D height map, RTAB - cost map">
 
 *Left: live camera with the Perception Port drawn over it. Right: the live depth scan as a rolling 3-D height map, RTAB - cost map.*
