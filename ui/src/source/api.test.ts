@@ -256,7 +256,22 @@ describe('operator boundary', () => {
       /['"]\/plan['"]/, COSTMAP_TOPIC]
     const offenders = production
       .filter(([path]) => !LIVE_VIEW.test(path))
-      .flatMap(([path, code]) => forbidden.filter((re) => re.test(code)).map((re) => `${path}: ${re}`))
+      .flatMap(([path, code]) => forbidden
+        .filter((re) => !(re.source === 'new WebSocket' && PHONE_SENDER.test(path))) // checked on its own below
+        .filter((re) => re.test(code)).map((re) => `${path}: ${re}`))
     expect(offenders).toEqual([])
+  })
+
+  // The phone camera page (phone.html) is a camera, not a console: its one socket goes to the camera bridge's
+  // ingest (/phone/ingest, frames only), never to rosbridge or the gateway's controls.
+  const PHONE_SENDER = /\/src\/phone\/PhoneSender\.tsx$/
+  it('the phone camera page only opens its socket to the camera ingest', () => {
+    const phone = production.filter(([path]) => /\/src\/phone\//.test(path))
+    expect(phone.some(([path]) => PHONE_SENDER.test(path))).toBe(true)
+    for (const [path, code] of phone) {
+      const sockets = code.match(/new WebSocket\([^)]*\)/g) ?? []
+      expect(sockets.every((s) => s === 'new WebSocket(ingestUrl(window.location)'), path).toBe(true)
+      expect(code, path).not.toMatch(/\/api\/|rosbridge|:9090/i)
+    }
   })
 })

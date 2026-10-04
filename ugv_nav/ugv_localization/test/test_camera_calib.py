@@ -210,12 +210,14 @@ def test_c19_a_copy_of_another_cameras_intrinsics_must_be_flagged_as_a_placehold
 
 
 @pytest.mark.skipif(not _CAMERAS.is_dir(), reason="config/cameras is not next to this test (installed copy)")
-def test_c20_the_shipped_phone_calibration_is_a_flagged_640x480_placeholder() -> None:
+def test_c20_the_phone_calibration_is_640x480_and_either_its_own_or_the_flagged_laptop_copy() -> None:
     path = _CAMERAS / "phone_640x480.yaml"
     if not path.is_file():
         pytest.fail("phone_640x480.yaml is missing")
     cal = load_calibration(path)
     laptop = load_calibration(_CAMERAS / "laptop_webcam_640x480.yaml")
     assert cal.camera_name == "phone" and (cal.width, cal.height) == (640, 480)
-    if cal.placeholder:  # once the owner calibrates the phone the flag is removed and K differs
+    if cal.placeholder:  # a stand-in is exactly the laptop's numbers
         assert (cal.k, cal.d, cal.r, cal.p) == (laptop.k, laptop.d, laptop.r, laptop.p)
+    else:  # calibrated 2026-10-03: the phone's own K, not the laptop's
+        assert cal.k != laptop.k

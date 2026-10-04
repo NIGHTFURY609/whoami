@@ -69,19 +69,62 @@ every 10 s while it changes.
 
 ```
 ros2 launch ugv_bringup camera.launch.py calibration_file:=<repo>/ugv_nav/config/cameras/phone_640x480.yaml \
-    device:=http://<tunnel host>:<port>/<stream> transport_latency_s:=<measured seconds> \
-    allow_placeholder_calibration:=true   # only while phone_640x480.yaml is still the placeholder
+    device:=http://<tunnel host>:<port>/<stream> transport_latency_s:=<measured seconds>
 ```
 
 - `transport_latency_s` (seconds, finite, 0 to 5, default 0, refused at start-up otherwise, so `350` typed for
   milliseconds does not pass): a network stream has no capture timestamps, so the stamp is the frame's arrival
   time minus this measured delay. `bringup.launch.py` takes the same argument. How to measure it:
   `config/cameras/README.md`.
-- `phone_640x480.yaml` ships as a flagged placeholder (`placeholder: true`, the laptop webcam's intrinsics). The
-  driver refuses it unless `allow_placeholder_calibration:=true` is given, and then logs a WARN at start-up and every
-  10 s while it is loaded. Do not use it for a mapping run that counts or for any autonomous run: replace it with a
-  real calibration of the phone, locked focus and exposure, and remove the flag (steps in `config/cameras/README.md`);
-  the override is then no longer needed.
+- `phone_640x480.yaml` is the owner's phone, calibrated 2026-10-03 through the browser page below (RMS 0.35 px; the
+  header says how). It is valid only for that phone in that 640x480 mode: another phone starts again from a flagged
+  placeholder (`placeholder: true`, refused unless `allow_placeholder_calibration:=true`).
+
+## Phone browser camera over a Cloudflare tunnel
+
+No app on the phone: it opens the web UI's `phone.html` through a tunnel to the laptop and sends its camera's frames,
+which the Windows camera bridge serves on the usual `http://host.docker.internal:8090/cam.mjpg`. The driver path is
+the one above, unchanged (newest frame only, stamp = arrival - `transport_latency_s`).
+
+```
+phone.html (getUserMedia 640x480) --JPEG over WebSocket /phone/ingest--> UI dev server (token gate, proxy)
+  --> webcam_stream.py --phone (ingest ws 127.0.0.1:8091) --> :8090/cam.mjpg --> camera driver
+```
+
+From Git Bash on the laptop:
+
+```
+PHONE=1 bash run.sh                                   # bridge + UI; prints the UI port and an access token
+cloudflared tunnel --url http://localhost:<UI port>   # second terminal; prints https://<name>.trycloudflare.com
+# on the phone: https://<name>.trycloudflare.com/phone.html?token=<token>, hold it landscape, tap START
+```
+
+The ROS stack starts once the first phone frame arrives (the driver's first open needs one). The overlays show in
+the laptop's console at `http://localhost:<UI port>`, as with the webcam. Env: `PHONE_CAM_Z`, `PHONE_CAM_PITCH`
+(mount), `PHONE_LATENCY_S` (`transport_latency_s`), `PHONE_WAIT_S`; map database `~/.ros/ugv/phone.db`.
+
+- **640x480 only, at three places.** The page asks the camera for 640x480 and sends a frame only when the camera
+  itself delivers exactly that, never scaled or cropped (K is valid only for the calibrated mode). Upright, the
+  camera gives 480x640: the page stops sending and asks for landscape (and locks landscape where the browser lets
+  it, Android in fullscreen). The bridge drops every frame that is not 640x480 (`/phone/status` counts them), and
+  the driver refuses a stream whose size differs from `phone_640x480.yaml`.
+- **Newest frame only.** The page skips a frame while the previous one is still buffered or two are unanswered by
+  the bridge, so a slow tunnel drops frames instead of delivering a late backlog stamped as current.
+- **Phone drops.** A locked screen or another app ends the page's session, and the bridge ends the stream (also
+  after `--stall-s`, 2 s, without a frame). The driver sees a dead camera (the arbiter holds) and reopens the URL
+  every 20 failed reads; the bridge answers 503 until the phone sends again, then the stream resumes without a
+  restart. One phone at a time: a second one is refused.
+- **Access.** A tunnel URL is public, and the UI server also proxies the operator API (e-stop release, goals; no
+  authentication in v1). `run.sh` therefore sets `UGV_TUNNEL_TOKEN`: any request that did not come from this machine
+  (or that Cloudflare relayed) needs `?token=` once, which becomes an HttpOnly cookie; everything else gets 401,
+  WebSocket upgrades included. Without the token (plain `npm run dev`) tunnel hosts are not allowed at all. Anyone
+  holding the link and token can reach the console: stop the tunnel when done. Named tunnels: add their host with
+  `UGV_ALLOWED_HOSTS=ugv.example.org`.
+- **Calibration and latency.** `phone_640x480.yaml` is calibrated through this same page (2026-10-03; steps in
+  `config/cameras/README.md`; its **LOCK FOCUS + EXPOSURE** button holds the lens where Android allows it). `run.sh`
+  passes `allow_placeholder_calibration` only if the file is ever flagged as a placeholder again. The page shows the median round trip to the bridge; half of it is a rough hint only:
+  measure `transport_latency_s` with the clock-photo method and rerun with `PHONE_LATENCY_S=<median s>`.
+- Keep the page in front with the screen on (it holds a wake lock); a background tab gets no camera.
 
 ## Full stack: `bringup.launch.py profile:=live_cam`
 

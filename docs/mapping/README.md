@@ -158,10 +158,10 @@ npm run build`; in the container `colcon test --packages-select ugv_localization
   the ground. Pitch and slopes are not tracked, so a ramp can read as a wall or a drop.
 - **Clipped about 1 m above the robot.** `Grid/MaxObstacleHeight: "1.0"` also clips `cloud_map` (measured: z max 0.96 m, 1.42 m
   with it off). Upper walls and trees are missing. Owner decision pending.
-- **Placeholder calibration.** `ugv_nav/config/cameras/phone_640x480.yaml` is the laptop webcam's intrinsics with
-  `placeholder: true`. The camera driver refuses it unless `allow_placeholder_calibration:=true` is passed; with the
-  override, scale and projection are wrong until the phone is calibrated, `calibration_placeholder` shows in the
-  statistics and the driver logs a WARN every 10 s. Do not trust any measurement made with it.
+- **Phone calibration.** `ugv_nav/config/cameras/phone_640x480.yaml` is the phone's own calibration since 2026-10-03
+  (RMS 0.35 px, 60 views; its header lists the limits: the board never reached the image corners). Runs made before
+  that used the laptop webcam's intrinsics as a flagged placeholder: their scale and projection are wrong, do not
+  trust measurements from them.
 - **Stamps are arrival time minus `transport_latency_s`** for a network camera, not exposure time (mindmap D10).
 - **A mask is held up to about 0.58 s** against the 0.5 s limit (owner decision below).
 - **Memory bounds the mission length.** rtabmap and map_assembler grow with every graph node and give nothing back: about
@@ -176,7 +176,7 @@ None of this has happened and no numbers exist for it. The synthetic screenshots
    While the phone is uncalibrated (item 2 not done), the launch that starts the camera driver for this recording needs
    `allow_placeholder_calibration:=true`, otherwise the driver refuses `phone_640x480.yaml` and nothing is recorded. The
    gate numbers from such a run are bring-up numbers only (wrong depth scale).
-2. Phone camera: lock focus and exposure, calibrate (`calibration_mode:=true` flow in `ugv_nav/ugv_bringup/README.md`), replace the placeholder YAML and remove the flag, measure the tunnel latency and set `transport_latency_s`.
+2. Phone camera: ~~lock focus and exposure, calibrate, replace the placeholder YAML~~ done 2026-10-03 (browser page, `phone_640x480.yaml`); still to do: measure the tunnel latency and set `transport_latency_s` (`PHONE_LATENCY_S` in `run.sh`).
 3. A re-measure in a lit scene (the baseline run used a black image, so its odometry and depth-stability rows are invalid) and the tape-measured wall test at 1-5 m (depth error per distance).
 4. The closed-loop end-to-end run on the UGV: mapping, save the database, restart in `localize`. Keep a screenshot of the map view and the stats values in this folder.
 5. Two open owner decisions: (a) the mask freshness budget, since a mask can be held up to about 0.58 s against the 0.5 s limit; (b) whether to keep `Grid/MaxObstacleHeight 1.0`, which clips the 3D cloud at about 1 m above the robot.

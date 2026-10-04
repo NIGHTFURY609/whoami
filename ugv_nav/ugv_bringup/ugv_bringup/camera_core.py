@@ -124,16 +124,29 @@ class LatestFrameReader:
     returns None until a newer one arrives. A failed read (not ok, no frame, or `read()` raising) keeps the
     stored frame, is counted in `failed_reads` (consecutive; a good read resets it) and backs off `retry_s`
     so a dead source does not spin a core.
+
+    With a `reopen` hook (network URLs: OpenCV never recovers a stream that dropped, e.g. a phone that locked its
+    screen) every `reopen_after` consecutive failed reads call it on this thread; True means the capture is open
+    again (`reopens` counts those). Only a good read resets `failed_reads`, so a camera that reopens but sends
+    nothing still reads as dead. A failed or raising reopen is reported in `last_error` and backs off
+    `reopen_backoff_s`.
     """
 
     def __init__(
-        self, read: Callable[[], tuple[bool, object]], now_s: Callable[[], float], *, retry_s: float = 0.05
+        self, read: Callable[[], tuple[bool, object]], now_s: Callable[[], float], *, retry_s: float = 0.05,
+        reopen: Callable[[], bool] | None = None, reopen_after: int = 20, reopen_backoff_s: float = 1.0,
     ) -> None:
-        if not retry_s >= 0.0:
-            raise ValueError("retry_s must be >= 0")
+        if not retry_s >= 0.0 or not reopen_backoff_s >= 0.0:
+            raise ValueError("retry_s and reopen_backoff_s must be >= 0")
+        if reopen_after < 1:
+            raise ValueError("reopen_after must be >= 1")
         self._read = read
         self._now_s = now_s
         self._retry_s = retry_s
+        self._reopen = reopen
+        self._reopen_after = reopen_after
+        self._reopen_backoff_s = reopen_backoff_s
+        self._reopens = 0
         self._lock = threading.Lock()
         self._stopping = threading.Event()
         self._thread: threading.Thread | None = None
@@ -174,6 +187,12 @@ class LatestFrameReader:
             return self._last_error
 
     @property
+    def reopens(self) -> int:
+        """Successful reopens of the capture so far."""
+        with self._lock:
+            return self._reopens
+
+    @property
     def is_alive(self) -> bool:
         return self._thread is not None and self._thread.is_alive()
 
@@ -198,7 +217,25 @@ class LatestFrameReader:
             with self._lock:
                 self._failed += 1
                 self._last_error = error
+                failed = self._failed
+            if self._reopen is not None and failed % self._reopen_after == 0:
+                if self._try_reopen():
+                    continue
+                self._stopping.wait(self._reopen_backoff_s)
+                continue
             self._stopping.wait(self._retry_s)
+
+    def _try_reopen(self) -> bool:
+        try:
+            ok, why = bool(self._reopen()), "reopen failed"
+        except Exception as exc:
+            ok, why = False, f"reopen failed: {type(exc).__name__}: {exc}"
+        with self._lock:
+            if ok:
+                self._reopens += 1
+            else:
+                self._last_error = f"{self._last_error}; {why}"
+        return ok
 
     def _store(self, frame: object, arrival_s: float) -> None:
         with self._lock:

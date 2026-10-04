@@ -22,6 +22,9 @@ clean stall/burst indicator.
 A stream that stalls without erroring leaves a blocked read, which counts no failure, so the driver watches the
 time since the last frame it took: after more than 2 s it logs a WARN "no new frame for N s" every report
 period (10 s) while that lasts, and an INFO when frames resume.
+A URL stream (`scheme://...`) whose reads keep failing is opened again every 20 failed reads, with a 1 s
+backoff while that fails (OpenCV never recovers a dropped network stream on its own, and a phone drops it every
+time its screen locks); a stream that comes back at another size is refused. Files and V4L2 are not reopened.
 
 Fails closed: no valid calibration, or a camera whose resolution differs from it, means no frames at all
 (a driver that publishes a fake K would corrupt DA3 depth and RTAB-Map geometry).
@@ -170,7 +173,11 @@ class CameraDriver(Node):
         self._stalled = False
         self._clamp_logged = False
         # Network streams stall and then deliver a burst: read them on a thread that keeps only the newest frame.
-        self._reader = None if v4l2 else LatestFrameReader(self._cap.read, self._now_s)
+        # A dropped URL stream (a phone that locked its screen) is reopened; a file is not (it would replay).
+        self._src = src
+        reopen = self._reopen if not v4l2 and "://" in str(src) else None
+        self._reader = None if v4l2 else LatestFrameReader(self._cap.read, self._now_s, reopen=reopen)
+        self._reported_reopens = 0
         self.create_timer(1.0 / fps, self._tick)
         self.create_timer(_REPORT_PERIOD_S, self._report)
         if calibrating:
@@ -187,6 +194,18 @@ class CameraDriver(Node):
         self._report()  # the placeholder warning at start-up, not only after the first period
         if self._reader is not None:
             self._reader.start()
+
+    def _reopen(self) -> bool:
+        """On the reader thread, after repeated failed reads: open the URL again. A stream that comes back at
+        another size is refused like at start-up (never published)."""
+        self._cap.release()
+        if not self._cap.open(self._src):
+            return False
+        got = (int(self._cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(self._cap.get(cv2.CAP_PROP_FRAME_HEIGHT)))
+        if got != self._size:
+            self._cap.release()
+            raise CaptureError(f"stream came back at {got[0]}x{got[1]}, calibration is {self._size[0]}x{self._size[1]}")
+        return True
 
     def _now_s(self) -> float:
         return self.get_clock().now().nanoseconds / 1e9
@@ -215,6 +234,10 @@ class CameraDriver(Node):
                     f"before they were published) in the last {_REPORT_PERIOD_S:g} s, {total} in total"
                 )
                 self._reported_dropped = total
+            reopens = self._reader.reopens
+            if reopens != self._reported_reopens:
+                self.get_logger().info(f"network camera reopened ({reopens} times since start)")
+                self._reported_reopens = reopens
             self._report_stall()
 
     def _report_stall(self) -> None:

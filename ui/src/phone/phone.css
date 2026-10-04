@@ -1,0 +1,73 @@
+/* The phone camera page: the console's tokens (index.css) without its layout, sized for a phone in landscape. */
+:root {
+  --bg: #03100c;
+  --panel: #061a14;
+  --line: #17382d;
+  --text: #cdf7e6;
+  --dim: #6c9f8c;
+  --accent: #86f0cf;
+  --on-pale: #04150f;
+  --pale: #aef0da;
+  --orange: #ffb36b;
+  --alert: #ff5a47;
+  --mono: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+
+  font: 13px/1.45 var(--mono);
+  color: var(--text);
+  background: var(--bg);
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+html, body, #root { margin: 0; height: 100%; background: var(--bg); }
+
+.phone {
+  display: flex;
+  height: 100%;
+  gap: 12px;
+  padding: max(12px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right))
+    max(12px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
+}
+@media (orientation: portrait) { .phone { flex-direction: column; } }
+
+.phone-view {
+  position: relative;
+  flex: 1 1 60%;
+  min-height: 0;
+  background: #000;
+  border: 1px solid var(--line);
+}
+.phone-view video { width: 100%; height: 100%; object-fit: contain; display: block; }
+.phone-warn, .phone-idle {
+  position: absolute; inset: auto 0 0 0;
+  padding: 10px 12px;
+  background: rgba(3, 16, 12, 0.85);
+  color: var(--orange);
+  font-weight: 700;
+}
+.phone-idle { inset: 0; display: grid; place-items: center; color: var(--dim); background: transparent; }
+
+.phone-side { flex: 1 1 40%; min-width: 0; overflow-y: auto; }
+.phone-side h1 { margin: 0 0 4px; font-size: 15px; color: var(--accent); letter-spacing: 0.04em; }
+.phone-dim { color: var(--dim); margin: 6px 0; }
+.phone-err { color: var(--alert); margin: 6px 0; overflow-wrap: anywhere; }
+
+.phone-btn {
+  width: 100%;
+  margin: 8px 0;
+  padding: 14px;
+  font: 700 15px var(--mono);
+  letter-spacing: 0.08em;
+  color: var(--on-pale);
+  background: var(--pale);
+  border: 0;
+}
+.phone-btn.stop { background: var(--alert); color: #fff; }
+.phone-btn.small { padding: 10px; font-size: 12px; background: transparent; color: var(--accent); border: 1px solid var(--accent); }
+
+.phone dl { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; margin: 8px 0; }
+.phone dt { color: var(--dim); }
+.phone dd { margin: 0; overflow-wrap: anywhere; }
+.phone dd.ok { color: var(--accent); }
+.phone dd.warn { color: var(--orange); }
+.phone select { font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line); padding: 4px; }

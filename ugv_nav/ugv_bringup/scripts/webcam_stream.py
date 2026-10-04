@@ -12,6 +12,14 @@ The driver still stamps each frame on arrival (ugv_bringup README).
 Needs Windows Python with opencv-python. --index is the DirectShow order
 (ffmpeg -hide_banner -list_devices true -f dshow -i dummy). Width/height must match the calibration.
 
+Phone browser camera instead of the webcam (the UI's phone.html through a tunnel; ugv_bringup README):
+
+    python .../webcam_stream.py --phone [--width 640 --height 480] [--ingest-port 8091] [--stall-s 2]
+
+The phone sends JPEG frames over a WebSocket (loopback :8091, reached through the UI dev server's /phone/ingest
+proxy); frames that are not exactly --width x --height are dropped. /cam.mjpg answers 503 until a fresh phone frame
+exists and ends when the phone leaves or stalls, so the driver reopens; /phone/status reports the counts.
+
 Recorded video instead of the webcam (eval only, e.g. an RC car's camera; ugv_bringup README):
 
     python .../webcam_stream.py --video clip.mp4 --calibration-out cal.yaml [--width 640] [--hfov-deg 90]
@@ -57,21 +65,35 @@ BOUNDARY = b"ugvframe"
 
 
 class Latest:
-    """The newest JPEG and a sequence number; readers block until a newer one exists."""
+    """The newest JPEG and a sequence number; readers block until a newer one exists.
+
+    `cut()` (phone mode: the phone left or stalled) drops the frame and bumps `generation`, which wakes every reader
+    so the stream responses end and the camera driver reopens instead of waiting on a dead connection."""
 
     def __init__(self) -> None:
         self._cond = threading.Condition()
         self._jpeg: bytes | None = None
         self._seq = 0
+        self._gen = 0
 
     def put(self, jpeg: bytes) -> None:
         with self._cond:
             self._jpeg, self._seq = jpeg, self._seq + 1
             self._cond.notify_all()
 
-    def wait_newer(self, seq: int, timeout: float) -> tuple[int, bytes | None]:
+    def cut(self) -> None:
         with self._cond:
-            self._cond.wait_for(lambda: self._seq > seq, timeout=timeout)
+            self._jpeg, self._gen = None, self._gen + 1
+            self._cond.notify_all()
+
+    @property
+    def generation(self) -> int:
+        with self._cond:
+            return self._gen
+
+    def wait_newer(self, seq: int, timeout: float, gen: int | None = None) -> tuple[int, bytes | None]:
+        with self._cond:
+            self._cond.wait_for(lambda: self._seq > seq or (gen is not None and self._gen != gen), timeout=timeout)
             return self._seq, (self._jpeg if self._seq > seq else None)
 
 
@@ -615,6 +637,162 @@ class Player:
                         self._rebase = True  # perception was slower than the video: stretch, never catch up
 
 
+_SOF_MARKERS = frozenset(range(0xC0, 0xD0)) - {0xC4, 0xC8, 0xCC}  # frame headers (not DHT, JPG, DAC)
+
+
+def jpeg_size(data: bytes) -> tuple[int, int] | None:
+    """(width, height) from a JPEG's frame header, without decoding it; None if it is not a readable JPEG."""
+    if data[:2] != b"\xff\xd8":
+        return None
+    i, n = 2, len(data)
+    while i + 4 <= n:
+        if data[i] != 0xFF:
+            return None
+        marker = data[i + 1]
+        if marker == 0xFF:  # fill byte
+            i += 1
+            continue
+        if marker == 0x01 or 0xD0 <= marker <= 0xD8:  # standalone markers, no length
+            i += 2
+            continue
+        if marker in (0xD9, 0xDA):  # end of image or scan data before any frame header
+            return None
+        seg = struct.unpack(">H", data[i + 2:i + 4])[0]
+        if seg < 2:
+            return None
+        if marker in _SOF_MARKERS:
+            if i + 9 > n:
+                return None
+            h, w = struct.unpack(">HH", data[i + 5:i + 9])
+            return (w, h) if w > 0 and h > 0 else None
+        i += 2 + seg
+    return None
+
+
+class PhoneIngest:
+    """Frames from a phone's browser (the UI's phone.html, over a WebSocket) into `latest` for /cam.mjpg.
+
+    One sender at a time: a second phone is refused while the first one sends, so two cameras never interleave on one
+    calibration; it takes over from a sender silent for `stall_s` (a half-open connection after the phone changed
+    network would otherwise lock every phone out), and the old connection is then closed (`is_sender`). Each
+    message is one JPEG; one that is not exactly `width` x `height` is dropped and counted, never scaled or cropped
+    (K is only valid for the calibrated size). When the sender leaves, or sends nothing for `stall_s`,
+    `latest.cut()` ends every stream response, so the camera driver's read fails at once and it reopens (instead
+    of blocking ~30 s in OpenCV); until a fresh frame arrives `ready()` is False and /cam.mjpg answers 503. No frame
+    is ever repeated: silence is a dead camera, and the safety arbiter holds."""
+
+    def __init__(self, latest: Latest, width: int, height: int, stall_s: float = 2.0, clock=time.monotonic) -> None:
+        self._latest, self._size, self.stall_s, self._clock = latest, (width, height), stall_s, clock
+        self._lock = threading.Lock()
+        self._sender: object | None = None
+        self._last_at: float | None = None  # last accepted frame
+        self._heard_at = 0.0  # last message of any kind, or the claim
+        self._cut = True
+        self.accepted = self.rejected = self.refused_senders = self.taken_over = 0
+        self.last_rejected = ""
+
+    def claim(self, sender: object) -> bool:
+        now = self._clock()
+        with self._lock:
+            if self._sender is not None and now - self._heard_at <= self.stall_s:
+                self.refused_senders += 1
+                return False
+            if self._sender is not None:
+                self.taken_over += 1
+            self._sender, self._last_at, self._heard_at = sender, None, now
+            cut, self._cut = not self._cut, True
+        if cut:
+            self._latest.cut()
+        return True
+
+    def is_sender(self, sender: object) -> bool:
+        with self._lock:
+            return self._sender is sender
+
+    def release(self, sender: object) -> None:
+        with self._lock:
+            if self._sender is not sender:
+                return
+            self._sender, self._last_at, self._cut = None, None, True
+        self._latest.cut()
+
+    def stalled(self, sender: object) -> None:
+        """The sender's connection is open but nothing arrived for `stall_s` (the page was hidden, the network
+        stalled): end the stream responses once, so the driver reopens and gets 503 until frames return."""
+        with self._lock:
+            if self._sender is not sender or self._cut:
+                return
+            self._cut = True
+        self._latest.cut()
+
+    def frame(self, sender: object, data: bytes) -> dict:
+        """Take one message; the reply the phone gets for it (it measures the round trip with these)."""
+        size = jpeg_size(data)
+        with self._lock:
+            if self._sender is not sender:
+                return {"ok": False, "error": "not the active sender"}
+            self._heard_at = self._clock()
+            if size != self._size:
+                self.rejected += 1
+                self.last_rejected = "not a JPEG" if size is None else f"{size[0]}x{size[1]}"
+                want = f"{self._size[0]}x{self._size[1]}"
+                return {"ok": False, "error": f"frame is {self.last_rejected}, need {want}"}
+            self.accepted += 1
+            self._last_at, self._cut = self._clock(), False
+            self._latest.put(data)
+        return {"ok": True, "w": size[0], "h": size[1]}
+
+    def ready(self) -> bool:
+        with self._lock:
+            return (self._sender is not None and self._last_at is not None and not self._cut
+                    and self._clock() - self._last_at <= self.stall_s)
+
+    def status(self) -> dict:
+        ready = self.ready()
+        with self._lock:
+            age = None if self._last_at is None else round(self._clock() - self._last_at, 3)
+            return {"connected": self._sender is not None, "ready": ready, "accepted": self.accepted,
+                    "rejected": self.rejected, "last_rejected": self.last_rejected, "last_frame_age_s": age,
+                    "refused_senders": self.refused_senders, "taken_over": self.taken_over,
+                    "size": list(self._size)}
+
+
+def run_ingest(ingest: PhoneIngest, bind: str, port: int) -> None:
+    """The phone's WebSocket (binary messages = JPEG frames, each answered with PhoneIngest.frame's reply plus the
+    message number). Loopback by default: the UI's dev server proxies /phone/ingest here behind its token gate."""
+    from websockets.exceptions import ConnectionClosed
+    from websockets.sync.server import serve as ws_serve
+
+    def handle(conn) -> None:
+        if not ingest.claim(conn):
+            conn.close(1013, "another phone is already streaming")
+            return
+        print("webcam_stream: phone connected")
+        n = 0
+        try:
+            while True:
+                if not ingest.is_sender(conn):  # a newer connection took over from this silent one
+                    conn.close(1000, "replaced by a newer phone connection")
+                    return
+                try:
+                    msg = conn.recv(timeout=ingest.stall_s)
+                except TimeoutError:
+                    ingest.stalled(conn)
+                    continue
+                if isinstance(msg, str):
+                    continue  # text is not a frame
+                n += 1
+                conn.send(json.dumps({"seq": n} | ingest.frame(conn, msg)))
+        except ConnectionClosed:
+            pass
+        finally:
+            ingest.release(conn)
+            print(f"webcam_stream: phone disconnected ({ingest.accepted} frames accepted, {ingest.rejected} rejected)")
+
+    with ws_serve(handle, bind, port, max_size=1 << 21, compression=None) as server:
+        server.serve_forever()
+
+
 def open_video(path: str, width: int, fallback_fps: float
                ) -> tuple[cv2.VideoCapture, tuple[int, int], tuple[int, int], float]:
     """The opened file, its decoded size, the size it is served at and its frame rate."""
@@ -652,8 +830,10 @@ def nearest_sample(img: tuple[int, int, bytes], query: str, itemsize: int) -> tu
     return tw, th, np.ascontiguousarray(arr[rows][:, cols]).tobytes()
 
 
-def make_handler(latest: Latest, player: Player | None = None, cache: OverlayCache | None = None):
-    """GET /cam.mjpg (the stream). With a video player also: GET /video/status, POST /video/{play,pause,replay} and
+def make_handler(latest: Latest, player: Player | None = None, cache: OverlayCache | None = None,
+                 phone: PhoneIngest | None = None):
+    """GET /cam.mjpg (the stream). With a phone ingest: GET /phone/status, and /cam.mjpg answers 503 while no phone
+    frame is fresh and ends when the phone leaves or stalls (`Latest.cut`). With a video player also: GET /video/status, POST /video/{play,pause,replay} and
     POST /video/sync?on=0|1. With an overlay cache, the recorded frames for the UI's recorded playback:
     GET /video/cache/bundle/<i>?w=&h= (all of one frame in one response, OverlayCache.bundle),
     /video/cache/frame/<i> (JPEG), /video/cache/mask/<i> (raw uint8 classes) and /video/cache/depth/<i> (raw
@@ -738,6 +918,9 @@ def make_handler(latest: Latest, player: Player | None = None, cache: OverlayCac
 
         def do_GET(self) -> None:  # noqa: N802 (http.server API)
             path = self.path.split("?")[0]
+            if path == "/phone/status" and phone is not None:
+                self._json(200, phone.status())
+                return
             if path == "/video/status":
                 if player is None:
                     self._json(404, {"error": "no video player"})
@@ -750,6 +933,10 @@ def make_handler(latest: Latest, player: Player | None = None, cache: OverlayCac
             if path != "/cam.mjpg":
                 self.send_error(404)
                 return
+            gen = latest.generation
+            if phone is not None and not phone.ready():
+                self.send_error(503, "no phone is streaming")  # fails the driver's open fast; it retries
+                return
             self.send_response(200)
             self.send_header("Content-Type", f"multipart/x-mixed-replace; boundary={BOUNDARY.decode()}")
             self.send_header("Cache-Control", "no-store")
@@ -757,7 +944,9 @@ def make_handler(latest: Latest, player: Player | None = None, cache: OverlayCac
             seq = 0
             try:
                 while True:
-                    seq, jpeg = latest.wait_newer(seq, timeout=2.0)
+                    seq, jpeg = latest.wait_newer(seq, timeout=2.0, gen=gen)
+                    if latest.generation != gen:
+                        break  # the phone left or stalled: end the response so the driver reopens
                     if jpeg is None:
                         continue  # camera stalled; keep the connection, send nothing (silence = dead camera)
                     self.wfile.write(b"--" + BOUNDARY + b"\r\nContent-Type: image/jpeg\r\nContent-Length: "
@@ -766,7 +955,7 @@ def make_handler(latest: Latest, player: Player | None = None, cache: OverlayCac
                 pass
 
         def log_message(self, fmt: str, *args) -> None:
-            if self.path.startswith(("/video/status", "/video/cache/")):
+            if self.path.startswith(("/video/status", "/video/cache/", "/phone/status")):
                 return  # the UI polls the status twice a second and fetches recorded frames by the hundred
             print(f"webcam_stream: {self.client_address[0]} {fmt % args}")
 
@@ -793,10 +982,18 @@ def main() -> int:
     ap.add_argument("--no-sync", action="store_true", help="--video: start in real time, not waiting for perception")
     ap.add_argument("--overlay-dir", help="--video: where overlays are saved (default: <video stem>.overlays/ beside it)")
     ap.add_argument("--no-record", action="store_true", help="--video: do not save overlays")
+    ap.add_argument("--phone", action="store_true",
+                    help="serve frames a phone browser sends over a WebSocket (the UI's phone.html) instead of the webcam")
+    ap.add_argument("--ingest-bind", default="127.0.0.1", help="--phone: WebSocket address (loopback: only via the UI)")
+    ap.add_argument("--ingest-port", type=int, default=8091, help="--phone: WebSocket port")
+    ap.add_argument("--stall-s", type=float, default=2.0,
+                    help="--phone: no frame for this long ends the stream (the driver reopens)")
     a = ap.parse_args()
 
     if a.video:
         return serve_video(a)
+    if a.phone:
+        return serve_phone(a)
 
     cap = cv2.VideoCapture(a.index, cv2.CAP_DSHOW)
     if not cap.isOpened():
@@ -837,9 +1034,9 @@ def make_server(bind: str, port: int, handler) -> ThreadingHTTPServer:
     return ThreadingHTTPServer((bind, port), handler)
 
 
-def serve(a: argparse.Namespace, latest: Latest, stop: threading.Event, cap: cv2.VideoCapture, what: str,
-          player: Player | None = None, cache: OverlayCache | None = None) -> int:
-    server = make_server(a.bind, a.port, make_handler(latest, player, cache))
+def serve(a: argparse.Namespace, latest: Latest, stop: threading.Event, cap: cv2.VideoCapture | None, what: str,
+          player: Player | None = None, cache: OverlayCache | None = None, phone: PhoneIngest | None = None) -> int:
+    server = make_server(a.bind, a.port, make_handler(latest, player, cache, phone))
     server.daemon_threads = True
     print(f"webcam_stream: {what} -> http://{a.bind}:{a.port}/cam.mjpg")
     try:
@@ -849,8 +1046,27 @@ def serve(a: argparse.Namespace, latest: Latest, stop: threading.Event, cap: cv2
     finally:
         stop.set()
         server.server_close()
-        cap.release()
+        if cap is not None:
+            cap.release()
     return 0
+
+
+def serve_phone(a: argparse.Namespace) -> int:
+    if a.width <= 0 or a.height <= 0 or not a.stall_s > 0.0:
+        print("webcam_stream: --width, --height and --stall-s must be > 0", file=sys.stderr)
+        return 1
+    try:
+        import websockets.sync.server  # noqa: F401  (fail here, not silently in the ingest thread)
+    except ImportError:
+        print("webcam_stream: --phone needs the websockets package (pip install websockets)", file=sys.stderr)
+        return 1
+    latest = Latest()
+    ingest = PhoneIngest(latest, a.width, a.height, stall_s=a.stall_s)
+    threading.Thread(target=run_ingest, args=(ingest, a.ingest_bind, a.ingest_port), name="phone-ingest",
+                     daemon=True).start()
+    print(f"webcam_stream: phone ingest on ws://{a.ingest_bind}:{a.ingest_port} (the UI proxies /phone/ingest here); "
+          f"{a.width}x{a.height} JPEG frames only; status at /phone/status")
+    return serve(a, latest, threading.Event(), None, f"phone {a.width}x{a.height}", phone=ingest)
 
 
 def serve_video(a: argparse.Namespace) -> int:
