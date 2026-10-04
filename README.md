@@ -61,7 +61,7 @@
 | Camera view with mask | Metric depth |
 |:---:|:---:|
 | ![Camera view with mask](docs/overlay.png) | ![Metric depth](docs/depth.png) |
-| **3-D height map** | **Operator console** |
+| **3-D height map** | **Perception View** |
 | ![3-D height map](docs/3d-view.png) | ![perception view](docs/preception.png) |
 
 <br>
