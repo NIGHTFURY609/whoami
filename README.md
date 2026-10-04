@@ -17,7 +17,7 @@
 <!-- TODO: replace with the hero GIF, e.g. docs/media/hero.gif -->
 <img src="docs/segmentation-ex-5.gif" width="48%" alt="Live camera with the Perception Port mask overlay">&nbsp;<img src="docs/3d-ex.gif" width="48%" alt="Live depth scan as a rolling 3-D height map, RTAB - cost map">
 
-*Left: live camera with the Perception Port drawn over it. Right: the live depth scan as a rolling 3-D height map.*
+*Left: live camera with the Perception Port drawn over it. Right: the live depth scan as a rolling 3-D height map, RTAB - cost map.*
 
 </div>
 
@@ -61,7 +61,7 @@
 | Camera view with mask | Metric depth |
 |:---:|:---:|
 | ![Camera view with mask](docs/overlay.png) | ![Metric depth](docs/depth.png) |
-| **3-D height map** | **Perception View** |
+| **3-D height map, RTAB - cost map** | **Perception View** |
 | ![3-D height map, RTAB - cost map](docs/3d-view.png) | ![perception view](docs/preception.png) |
 
 <br>
