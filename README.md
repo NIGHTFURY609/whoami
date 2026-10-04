@@ -15,8 +15,7 @@
 [![Status](https://img.shields.io/badge/status-testing%20mode-orange)](#status)
 
 <!-- TODO: replace with the hero GIF, e.g. docs/media/hero.gif -->
-<img src="" width="90%" alt="Hero GIF placeholder">
-<img src="<img width="597" height="448" alt="segmentation-ex-5" <img src="https://github.com/user-attachments/assets/b0b6acc8-402b-4d2a-9b78-831638cec1b8" width="48%" alt="Live camera with the Perception Port mask overlay">&nbsp;<img src="https://github.com/user-attachments/assets/755ac146-b989-4aaa-8ee5-3ac670946efe" width="48%" alt="Live depth scan as a rolling 3-D height map">
+<img src="docs/segmentation-ex-5.gif" width="48%" alt="Live camera with the Perception Port mask overlay">&nbsp;<img src="docs/3d-ex.gif" width="48%" alt="Live depth scan as a rolling 3-D height map">
 
 *Left: live camera with the Perception Port drawn over it. Right: the live depth scan as a rolling 3-D height map.*
 
@@ -61,9 +60,9 @@
 
 | Camera view with mask | Metric depth |
 |:---:|:---:|
-| ![Camera view placeholder](https://placehold.co/600x340/161b22/8b949e?text=Camera+%2B+mask) | ![Depth placeholder](https://placehold.co/600x340/161b22/8b949e?text=Depth) |
+| ![Camera view with mask](docs/overlay.png) | ![Metric depth](docs/depth.png) |
 | **3-D height map** | **Operator console** |
-| ![Map view placeholder](https://placehold.co/600x340/161b22/8b949e?text=3D+map) | ![Console placeholder](https://placehold.co/600x340/161b22/8b949e?text=Console) |
+| ![3-D height map](docs/3d-view.png) | ![Operator console](docs/dashboard.png) |
 
 <br>
 
@@ -141,7 +140,7 @@ The outdoor test split the work between two devices. The phone only captured vid
 ## Resource usage
 
 <!-- TODO: add GPU / CPU / RAM usage screenshot, e.g. docs/media/resources.png -->
-![Resource usage placeholder](https://placehold.co/1200x420/161b22/8b949e?text=GPU+%2F+CPU+%2F+RAM+usage)
+![Resource usage placeholder](docs/usage.png)
 
 <sub>Measured during the outdoor test on: i7-13620H · RTX 4060 Laptop 8 GB · 16 GB DDR5 · 640×480 phone camera</sub>
 
