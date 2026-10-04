@@ -22,9 +22,25 @@
 </div>
 
 ---
+## Contents
+
+- [At a glance](#at-a-glance)
+- [Demo](#demo)
+- [How it works](#how-it-works)
+- [Rules the system never breaks](#rules-the-system-never-breaks)
+- [Built with](#built-with)
+- [Test setup](#test-setup)
+- [Resource usage](#resource-usage)
+- [Status](#status)
+- [Getting started](#getting-started)
+- [Team](#team)
+- [Credits](#credits)
+- [License](#license)
+
+---
 
 > [!NOTE]
-> This is a software stack. So far it has run on a laptop with a webcam, a phone camera and a recorded RC-car video, not on a physical robot.
+> **Field tested outdoors.** A mobile phone streamed its camera to a laptop through a tunnel, and the laptop ran the whole stack live: perception, SLAM, planning and the safety gate. See [Test setup](#test-setup).
 
 <br>
 
@@ -112,12 +128,40 @@ Full contract in [`architecture.md`](architecture.md), team split in [`dev.md`](
 
 <br>
 
+## Test setup
+
+The outdoor test split the work between two devices. The phone only captured video, and the laptop did all the computing.
+
+```
+ Mobile phone camera  ──(640×480 frames over a tunnel)──►  Laptop: full stack
+                                                            perception · SLAM · Nav2 · safety · console
+```
+| | |
+|---|---|
+| **Camera** | Mobile phone, fixed 640×480, streamed live over a tunnel |
+| **CPU** | Intel Core i7-13620H (13th gen) |
+| **GPU** | NVIDIA RTX 4060 Laptop, 8 GB |
+| **RAM** | 16 GB DDR5 |
+| **Location** | Outdoors, Paduvapuram, Ernakulam, Kerala, India (PIN 683582) |
+| **Date and time** | 3 October 2026, 5:00 pm IST |
+
+**Conditions at test time**
+
+| | |
+|---|---|
+| **Climate** | Tropical monsoon, humid; early October is the end of the southwest monsoon |
+| **Temperature** | `30°C` |
+| **Sky** | `partly cloudy, light drizzle` |
+| **Light** | Late-afternoon sun about 17° above the horizon in the west; sunset around 6:14 pm |
+
+<br>
+
 ## Resource usage
 
 <!-- TODO: add GPU / CPU / RAM usage screenshot, e.g. docs/media/resources.png -->
 ![Resource usage placeholder](https://placehold.co/1200x420/161b22/8b949e?text=GPU+%2F+CPU+%2F+RAM+usage)
 
-<sub>Measured on: `<GPU>` · `<CPU>` · `<RAM>`</sub>
+<sub>Measured during the outdoor test on: i7-13620H · RTX 4060 Laptop 8 GB · 16 GB DDR5 · 640×480 phone camera</sub>
 
 <br>
 
@@ -129,14 +173,15 @@ Full contract in [`architecture.md`](architecture.md), team split in [`dev.md`](
 - [x] Semantic costmap and Nav2 planning
 - [x] Safety arbiter as the only `/cmd_vel` publisher
 - [x] Web console with camera view and 3-D map view
+- [x] Outdoor field test: phone camera over a tunnel, laptop compute
 - [ ] Real robot footprints (Nav2 uses a placeholder for now)
 - [ ] Simulation and rosbag profiles
 - [ ] Elevation map (deferred)
-- [ ] First outdoor run
 
 > [!WARNING]
 > **Known limits**
 > - Depth from a single camera wobbles in scale from frame to frame, so the same wall can show up at two distances.
+> - The tunnel adds network delay between the phone and the laptop, so frame timestamps are corrected by a measured latency, not taken at capture.
 > - Recorded-video runs use guessed camera settings. Treat them as a demo, not a measurement.
 
 <br>
@@ -170,11 +215,11 @@ Then create the `ugv-run` container as described in [`ugv_nav/ugv_bringup/README
 
 ```bash
 bash run.sh                          # laptop webcam
-PHONE=1 bash run.sh                  # phone camera
+PHONE=1 bash run.sh                  # phone camera over a tunnel (the outdoor test setup)
 VIDEO=/path/to/clip.mp4 bash run.sh  # recorded video
 ```
 
-Open the console at **http://localhost:5173**.
+Open the console at **http://localhost:5173**. In phone mode, `run.sh` prints the link to open on the phone.
 
 <details>
 <summary><b>Project structure</b></summary>
@@ -202,15 +247,63 @@ docs/                 status report, mapping notes
 
 | Area | Member |
 |---|---|
-| Perception and vision | `@ligth279` |
-| SLAM and localization | `@NIGHTFURY609` |
-| Costmaps and geometry | `@ibinpaul` |
-| Planning and control | `@sivuiii` |
-| Safety and platform | `@Baka-desu` |
+| Perception and vision | `@handle` |
+| SLAM and localization | `@handle` |
+| Costmaps and geometry | `@handle` |
+| Planning and control | `@handle` |
+| Safety and platform | `@handle` |
 
 ## Credits
 
-[RTAB-Map](https://introlab.github.io/rtabmap/) · [Nav2](https://docs.nav2.org/) · [Depth Anything 3](https://github.com/ByteDance-Seed/Depth-Anything-3) · [RUGD SegFormer](https://huggingface.co/JasonTStanley/RUGD-Segformer) · [Ultralytics YOLOE](https://docs.ultralytics.com/)
+This project builds on the following open models and datasets. Thank you to their authors.
+
+### Models
+
+| Model | Used for | Source | Paper |
+|---|---|---|---|
+| **Depth Anything 3 Metric Large** | Metric depth for SLAM and the 3-D map | [`depth-anything/DA3METRIC-LARGE`](https://huggingface.co/depth-anything/DA3METRIC-LARGE) · [GitHub](https://github.com/ByteDance-Seed/Depth-Anything-3) | Lin et al., *Depth Anything 3: Recovering the Visual Space from Any Views*, 2025, [arXiv:2511.10647](https://arxiv.org/abs/2511.10647) |
+| **RUGD SegFormer-B5** | Live path / hazard segmentation | [`JasonTStanley/RUGD-Segformer`](https://huggingface.co/JasonTStanley/RUGD-Segformer) | Xie et al., *SegFormer: Simple and Efficient Design for Semantic Segmentation with Transformers*, NeurIPS 2021, [arXiv:2105.15203](https://arxiv.org/abs/2105.15203) |
+
+### Dataset
+
+| Dataset | Used for | Source | Paper |
+|---|---|---|---|
+| **RUGD** | Training data behind the segmentation model (25 off-road classes, which we remap to 3) | [rugd.vision](http://rugd.vision/) | Wigness et al., *A RUGD Dataset for Autonomous Navigation and Visual Perception in Unstructured Outdoor Environments*, IROS 2019, [IEEE](https://ieeexplore.ieee.org/abstract/document/8968283) |
+
+<details>
+<summary><b>BibTeX</b></summary>
+
+```bibtex
+@article{lin2025depthanything3,
+  title   = {Depth Anything 3: Recovering the Visual Space from Any Views},
+  author  = {Lin, Haotong and others},
+  journal = {arXiv preprint arXiv:2511.10647},
+  year    = {2025}
+}
+
+@inproceedings{xie2021segformer,
+  title     = {SegFormer: Simple and Efficient Design for Semantic Segmentation with Transformers},
+  author    = {Xie, Enze and Wang, Wenhai and Yu, Zhiding and Anandkumar, Anima and Alvarez, Jose M. and Luo, Ping},
+  booktitle = {Advances in Neural Information Processing Systems (NeurIPS)},
+  year      = {2021}
+}
+
+@inproceedings{wigness2019rugd,
+  title     = {A RUGD Dataset for Autonomous Navigation and Visual Perception in Unstructured Outdoor Environments},
+  author    = {Wigness, Maggie and Eum, Sungmin and Rogers, John G. and Han, David and Kwon, Heesung},
+  booktitle = {IEEE/RSJ International Conference on Intelligent Robots and Systems (IROS)},
+  year      = {2019}
+}
+```
+
+</details>
+
+### Software
+
+[RTAB-Map](https://introlab.github.io/rtabmap/) · [Nav2](https://docs.nav2.org/) · [ROS 2](https://docs.ros.org/) · [Hugging Face Transformers](https://github.com/huggingface/transformers) · [Ultralytics YOLOE](https://docs.ultralytics.com/) (optional adapter)
+
+> [!NOTE]
+> Model weights aren't included in this repo. They're downloaded from the sources above and stay under their own licenses: Depth Anything 3 Metric Large is Apache 2.0, and for the RUGD SegFormer weights and the RUGD dataset, see their model card and website.
 
 ## License
 
