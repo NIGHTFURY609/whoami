@@ -53,15 +53,22 @@
 ## How it works
 
 ```mermaid
-flowchart TD
-    CAM[Camera] --> PER[Perception<br/>SegFormer-B5 + Depth Anything 3]
-    CAM --> SLAM[RTAB-Map RGB-D]
-    PER -- depth --> SLAM
-    PER -- 3-class mask --> CM[Semantic costmap]
-    CM --> NAV[Nav2]
-    SLAM -- pose --> NAV
-    NAV -- candidate command --> ARB{Safety arbiter}
-    ARB -- /cmd_vel --> BASE[Robot base]
+flowchart LR
+    CAM[Camera<br/>webcam / phone / video] --> DRV[Camera driver<br/>Image + CameraInfo]
+    DRV --> PER[Perception<br/>RUGD SegFormer-B5<br/>DA3 Metric Large]
+    DRV --> SYNC[rgbd_sync]
+    PER -- /segmentation/mask<br/>3 classes + conf + age --> CM[Semantic costmap<br/>0.1 m grid]
+    PER -- /perception/depth/image --> SYNC
+    SYNC --> SLAM[RTAB-Map RGB-D<br/>map → odom → base_link]
+    SLAM -- TF + /ugv/pose_valid --> NAV
+    CM --> NAV[Nav2<br/>Smac2D + RPP]
+    NAV -- /cmd_vel_nav2 --> ARB[Safety arbiter]
+    PER -- /ugv/perception_degraded --> ARB
+    SLAM -- pose_valid --> ARB
+    ESTOP[E-stop] --> ARB
+    ARB -- /cmd_vel --> BASE[Diff-drive base]
+    API[ugv_api gateway<br/>HTTP + SSE] <--> UI[Web operator console]
+    ARB --> API
 ```
 
 1. **Camera.** A webcam, a phone streaming over a tunnel, or a recorded video. All three go through the same live path.
@@ -195,11 +202,11 @@ docs/                 status report, mapping notes
 
 | Area | Member |
 |---|---|
-| Perception and vision | `@handle` |
-| SLAM and localization | `@handle` |
-| Costmaps and geometry | `@handle` |
-| Planning and control | `@handle` |
-| Safety and platform | `@handle` |
+| Perception and vision | `@ligth279` |
+| SLAM and localization | `@NIGHTFURY609` |
+| Costmaps and geometry | `@ibinpaul` |
+| Planning and control | `@sivuiii` |
+| Safety and platform | `@Baka-desu` |
 
 ## Credits
 
