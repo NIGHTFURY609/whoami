@@ -1,15 +1,17 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { depthToRgba } from '../map/geometry'
-import { enabledLayers, parseToggles, toggled, type MapToggles, type ToggleKey } from '../map/mapToggles'
+import {
+  LIVE_MODES, enabledLayers, parseToggles, toggled, withLiveMode, type LiveMode, type MapToggles, type ToggleKey,
+} from '../map/mapToggles'
 import { MapScene } from '../map/scene'
 import { useMapData } from '../map/useMapData'
 import { LAYERS, type MapStatus, type Telemetry } from '../source/api'
 import { GH, GW } from '../types'
 import { mapBanner } from './mapStats'
 
-// The map view, as in the owner's reference picture: the 3D map (accumulated cloud, live depth scan coloured by
-// height, trajectory, the cost grid's halo around obstacles, the robot) with the depth image and the
-// camera image stacked on its left edge. Display only: the 3D layers come from the gateway's map endpoints (GETs) and
+// The map view, as in the owner's reference picture: the live depth scan as a height heat map (merged into a rolling
+// terrain, or the current scan only), the cost grid with its free cells painted as the pathway, the travelled path as
+// a ribbon the car's width and the car, with the depth image and the camera image stacked on its left edge. Display only: the 3D layers come from the gateway's map endpoints (GETs) and
 // the telemetry stream's pose; the two image panels show the camera feed the console already receives for the camera
 // view (passed in by App), so no image travels twice. Nothing here commands anything.
 
@@ -20,12 +22,15 @@ const DEPTH_PANEL_MAX_M = 8 // the depth panel's grey ramp: white at 0 m, black 
 // Short labels keep the bar on one row from a 1280 px window up (the view area is then about 580 px wide); the full
 // name is the accessible name and the tooltip.
 const LAYER_BUTTONS: { key: ToggleKey; label: string; name: string; title: string }[] = [
-  { key: 'cloud', label: 'cloud', name: 'Map cloud', title: 'Map cloud: the accumulated 3D map, in camera colours' },
-  { key: 'live', label: 'live', name: 'Live cloud', title: 'Live cloud: the current depth scan, coloured by height' },
-  { key: 'trajectory', label: 'path', name: 'Trajectory path', title: 'Trajectory: the path the robot has travelled' },
-  { key: 'grid', label: 'cost', name: 'Cost grid', title: 'Cost grid: obstacles and their inflation halo' },
+  { key: 'live', label: 'live', name: 'Live heat map', title: 'Live heat map: the depth scan coloured by height, blue low to red high' },
+  { key: 'trajectory', label: 'path', name: 'Travelled path', title: 'Travelled path: a ribbon the car\'s width behind the car' },
+  { key: 'grid', label: 'cost', name: 'Cost grid', title: 'Cost grid: free cells painted as the pathway (cells never seen count as free), obstacles and their halo' },
   { key: 'images', label: 'img', name: 'Image panels', title: 'Image panels: depth and camera' },
 ]
+const LIVE_MODE_TITLES: Record<LiveMode, string> = {
+  terrain: 'Terrain: every scan merged into a 30 m height map around the car, so ground already seen stays',
+  scan: 'Scan: the current scan only, lighter and never old',
+}
 const count = (n: number) => n.toLocaleString('en-US')
 
 const loadToggles = (): MapToggles => {
@@ -104,7 +109,6 @@ export function MapView({ telemetry, live, image, depth }: Props) {
   const status = data.status
   const noMap = !status || LAYERS.every((l) => status.seq[l] === 0)
   const pose = telemetry?.pose ?? null
-  const cloud = ofEpoch(data.cloud, status)
   const liveCloud = ofEpoch(data.live, status)
   const trajectory = ofEpoch(data.trajectory, status)
   const grid = ofEpoch(data.grid, status)
@@ -113,12 +117,19 @@ export function MapView({ telemetry, live, image, depth }: Props) {
   // goes first: the first layer to arrive frames the camera on it within the same commit.
   const shownPose = live ? pose : null
   useEffect(() => { scene?.setPose(shownPose) }, [scene, shownPose])
-  const { cloud: showCloud, live: showLive, trajectory: showTrajectory, grid: showGrid } = toggles
+  const { live: showLive, liveMode, trajectory: showTrajectory, grid: showGrid } = toggles
   useEffect(() => {
-    scene?.setLayers({ cloud: showCloud, live: showLive, trajectory: showTrajectory, grid: showGrid })
-  }, [scene, showCloud, showLive, showTrajectory, showGrid])
-  useEffect(() => { scene?.setCloud(cloud) }, [scene, cloud])
+    scene?.setLayers({ live: showLive, trajectory: showTrajectory, grid: showGrid })
+  }, [scene, showLive, showTrajectory, showGrid])
+  // The mode goes before the scan, so a mount in the scan mode never builds a terrain first.
+  useEffect(() => { scene?.setLiveMode(liveMode) }, [scene, liveMode])
   useEffect(() => { scene?.setLive(liveCloud) }, [scene, liveCloud])
+  const [terrainCells, setTerrainCells] = useState<number | null>(null)
+  useEffect(() => {
+    if (!scene) return
+    scene.onInfo = (info) => setTerrainCells(info.terrainCells)
+    return () => { scene.onInfo = null }
+  }, [scene])
   useEffect(() => { scene?.setTrajectory(trajectory) }, [scene, trajectory])
   useEffect(() => { scene?.setGrid(grid) }, [scene, grid])
 
@@ -126,6 +137,10 @@ export function MapView({ telemetry, live, image, depth }: Props) {
   const flip = (key: ToggleKey) => {
     touched.current = true
     setToggles((t) => toggled(t, key))
+  }
+  const chooseLiveMode = (mode: LiveMode) => {
+    touched.current = true
+    setToggles((t) => withLiveMode(t, mode))
   }
 
   const banner = mapBanner({ noMap, statusStale: data.stale, telemetryLost: !live, stats: status?.stats })
@@ -135,8 +150,8 @@ export function MapView({ telemetry, live, image, depth }: Props) {
   const cameraPanel = toggles.images ? image : null
   // Counts sit in the stage, not the bar, so the bar never cuts a number short.
   const info = [
-    showCloud && cloud && `${count(cloud.count)} map pts`,
-    showLive && liveCloud && `${count(liveCloud.count)} live pts`,
+    showLive && liveMode === 'terrain' && terrainCells !== null && terrainCells > 0 && `${count(terrainCells)} terrain cells`,
+    showLive && liveMode === 'scan' && liveCloud && `${count(liveCloud.count)} live pts`,
     showTrajectory && trajectory && `${trajectory.lengthM.toFixed(1)} m path`,
   ].filter(Boolean).join(' · ')
 
@@ -150,10 +165,23 @@ export function MapView({ telemetry, live, image, depth }: Props) {
         </span>
         <span className="livefeed-layers">
           {LAYER_BUTTONS.map(({ key, label, name, title }) => (
-            <button key={key} type="button" title={title} aria-label={name} className={toggles[key] ? 'on' : ''}
-              aria-pressed={toggles[key]} onClick={() => flip(key)}>
-              {label}
-            </button>
+            <span key={key} className="livefeed-group">
+              <button type="button" title={title} aria-label={name} className={toggles[key] ? 'on' : ''}
+                aria-pressed={toggles[key]} onClick={() => flip(key)}>
+                {label}
+              </button>
+              {key === 'live' && (
+                <span className="livefeed-seg" role="group" aria-label="Live mode">
+                  {LIVE_MODES.map((mode) => (
+                    <button key={mode} type="button" title={LIVE_MODE_TITLES[mode]} disabled={!showLive}
+                      className={liveMode === mode ? 'on' : ''} aria-pressed={liveMode === mode}
+                      onClick={() => chooseLiveMode(mode)}>
+                      {mode}
+                    </button>
+                  ))}
+                </span>
+              )}
+            </span>
           ))}
           <button type="button" aria-label="Reset view" title="Reset view: back behind the robot" disabled={!scene}
             onClick={() => scene?.resetView()}>

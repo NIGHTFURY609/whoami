@@ -1,32 +1,29 @@
-# Camera: phone streaming 640x480 video to the laptop over a network tunnel (MJPEG over HTTP or RTSP,
-# opened by URL with the driver's `device` argument). K is valid only at 640x480.
-#
-# THIS IS NOT A CALIBRATION OF THE PHONE. The intrinsics below are copied unchanged from
-# laptop_webcam_640x480.yaml so that the driver can start and the rest of the stack can be brought up and
-# checked while the phone is not yet calibrated. They belong to a different camera with a different lens.
-# Used as they are, they stretch depth along the viewing axis in proportion to the focal-length error: DA3
-# converts depth to metres with fx and RTAB-Map back-projects it with K, so every metric distance and the map
-# scale come out wrong by that factor, with full confidence.
-#
-# `placeholder: true` makes the camera driver log a WARN at start-up and every 10 s while this file is loaded.
-# Replace this file, and remove the `placeholder` line, before any mapping run that counts:
-# lock the phone's focus and exposure, run the driver with calibration_mode:=true, calibrate at 640x480 with
-# cameracalibrator, and save the result as this file (steps in config/cameras/README.md).
-placeholder: true
+# Camera: the owner's phone, main rear camera, streamed by the web UI's phone.html (getUserMedia 640x480, JPEG over a
+# WebSocket to webcam_stream.py --phone; ugv_bringup README "Phone browser camera"). K is valid only for that 640x480
+# mode, landscape, with the focus the page locked; another phone, mode or zoom needs its own calibration.
+# Calibrated: 2026-10-03 by the project owner with ROS camera_calibration (cameracalibrator, Lyrical), printed
+#   checkerboard 10x7 inner corners, 0.020 m squares, 71 views saved through the browser stream at about 2 fps.
+# Solved again from the calibrator's saved views with OpenCV calibrateCamera (k3 fixed at 0, as the calibrator does),
+#   leaving out 11 consecutive views (47-57) with per-view error over 1.5 px: about half as sharp as the others and
+#   still 1.7-4.4 px under the final model (blur or the focus moving). The calibrator's own all-views result was
+#   fx 492, cx 299, tangential -0.017/-0.021 at RMS 1.22 px; this one is RMS 0.347 px over 60 views, worst 0.55 px.
+# Coverage: the board centre stayed within x 159-489, y 64-341, so the image corners are extrapolated; recalibrate
+#   with the board pushed into the corners if straight edges look bent at the image border.
+# P is the alpha-0 rectified matrix (cv2.getOptimalNewCameraMatrix), the calibrator's convention.
 image_width: 640
 image_height: 480
 camera_name: phone
 camera_matrix:
   rows: 3
   cols: 3
-  data: [594.58444,   0.     , 311.15451,
-           0.     , 596.2187 , 232.11396,
+  data: [455.11054,   0.     , 319.91235,
+           0.     , 457.00877, 238.03488,
            0.     ,   0.     ,   1.     ]
 distortion_model: plumb_bob
 distortion_coefficients:
   rows: 1
   cols: 5
-  data: [0.033570, -0.132296, -0.003104, 0.001760, 0.000000]
+  data: [0.044891, -0.069804, -0.001640, 0.000590, 0.000000]
 rectification_matrix:
   rows: 3
   cols: 3
@@ -36,6 +33,6 @@ rectification_matrix:
 projection_matrix:
   rows: 3
   cols: 4
-  data: [593.94919,   0.     , 311.87159,   0.     ,
-           0.     , 597.38709, 231.14419,   0.     ,
+  data: [457.52761,   0.     , 320.32999,   0.     ,
+           0.     , 460.4213 , 237.37793,   0.     ,
            0.     ,   0.     ,   1.     ,   0.     ]

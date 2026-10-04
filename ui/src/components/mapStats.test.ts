@@ -6,14 +6,13 @@ const row = (rows: { k: string; v: string }[], k: string) => rows.find((r) => r.
 describe('map widget values', () => {
   it('formats every known stat', () => {
     const rows = mapRows({
-      keyframes: 12, loop_closures: 3, path_length_m: 41.26, cloud_source_points: 1234567,
+      keyframes: 12, loop_closures: 3, path_length_m: 41.26,
       db_bytes: 52_428_800, last_update_age_s: 0.51, mode: 'mapping', calibration_placeholder: false,
     })
     expect(rows).toEqual([
       { k: 'keyframes', v: '12' },
       { k: 'closure links', v: '3' },
       { k: 'path length', v: '41.3 m' },
-      { k: 'cloud source pts', v: '1,234,567' },
       { k: 'database', v: '52.4 MB' },
       { k: 'last update', v: '0.5 s' },
       { k: 'mode', v: 'MAPPING' },
@@ -22,7 +21,7 @@ describe('map widget values', () => {
 
   it('shows the neutral placeholder for an absent, null or unusable value, never undefined or NaN', () => {
     const blank = mapRows({}).map((r) => r.v)
-    expect(blank).toEqual(new Array(6).fill('—'))
+    expect(blank).toEqual(new Array(5).fill('—'))
     expect(mapRows(undefined).map((r) => r.v)).toEqual(blank)
     expect(mapRows({ keyframes: null, db_bytes: null }).map((r) => r.v)).toEqual(blank)
     const junk = mapRows({ keyframes: Number.NaN, path_length_m: Infinity, db_bytes: 'big', loop_closures: '3' })
@@ -56,12 +55,11 @@ describe('map widget values', () => {
   })
 
   it('prints a value that rounds to negative zero as zero', () => {
-    const rows = mapRows({ keyframes: -0.4, loop_closures: -0, path_length_m: -0.04, db_bytes: -1000, cloud_source_points: -0.2 })
+    const rows = mapRows({ keyframes: -0.4, loop_closures: -0, path_length_m: -0.04, db_bytes: -1000 })
     expect(row(rows, 'keyframes')).toBe('0')
     expect(row(rows, 'closure links')).toBe('0')
     expect(row(rows, 'path length')).toBe('0.0 m')
     expect(row(rows, 'database')).toBe('0.0 MB')
-    expect(row(rows, 'cloud source pts')).toBe('0')
     for (const r of rows) expect(r.v).not.toMatch(/-0/)
   })
 
@@ -95,14 +93,14 @@ describe('map input health rows', () => {
   it('keeps the base rows first and the optional rows after them', () => {
     const rows = mapRows({ keyframes: 1, mode: 'mapping', map_rejects: 3, map_restarts: 1 })
     expect(rows.map((r) => r.k)).toEqual([
-      'keyframes', 'closure links', 'path length', 'cloud source pts', 'database', 'last update',
+      'keyframes', 'closure links', 'path length', 'database', 'last update',
       'mode', 'rejects', 'restarts',
     ])
   })
 
   it('attaches the last reject to the rejects row when there are rejects', () => {
-    const rows = mapRows({ map_rejects: 3, map_last_reject: 'cloud: frame odom is not map' })
-    expect(rows.find((r) => r.k === 'rejects')).toEqual({ k: 'rejects', v: '3', title: 'cloud: frame odom is not map' })
+    const rows = mapRows({ map_rejects: 3, map_last_reject: 'frame_grid: grid is in frame odom, not map' })
+    expect(rows.find((r) => r.k === 'rejects')).toEqual({ k: 'rejects', v: '3', title: 'frame_grid: grid is in frame odom, not map' })
     expect(rows.find((r) => r.k === 'restarts')).toBeUndefined()
   })
 

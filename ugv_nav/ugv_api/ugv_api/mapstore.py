@@ -2,7 +2,7 @@
 
 The ROS side `put`s a layer's source (a numpy array or a small dict, see app.py for the shape each layer
 takes) every time the underlying topic updates; HTTP threads ask for `blob(layer, encode)`. Encoding a
-500 k point cloud costs real time, so it happens on the request thread, at most once per `seq`, and not at all
+150 k point live scan costs real time, so it happens on the request thread, at most once per `seq`, and not at all
 for a layer nobody asks for. `put` only swaps a reference: sources are treated as immutable once stored.
 
 Threads: `put`, `put_stats` and `touch` come from the ROS executor thread; `blob`, `seq`, `seqs`, `stats` and
@@ -54,7 +54,7 @@ def _scalar(value: Any) -> tuple[bool, Any]:
 
 
 class MapStore:
-    LAYERS = ("cloud", "trajectory", "grid", "live")
+    LAYERS = ("trajectory", "grid", "live")
 
     def __init__(self, *, epoch: int | None = None) -> None:
         """`epoch` is a random uint32 chosen once, so a viewer can tell a restarted gateway (seq starts over)

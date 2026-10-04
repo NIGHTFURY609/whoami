@@ -312,3 +312,70 @@ def test_frame_stamp_is_arrival_minus_latency_in_nanoseconds():
 
 def test_frame_stamp_is_never_negative():
     assert frame_stamp_ns(0.1, 0.5) == 0  # sim clock near zero with a large configured latency
+
+
+class Reopener:
+    """The reopen hook: counts calls and answers from a queue (True = reopened, False or an exception = failed)."""
+
+    def __init__(self, *answers: object) -> None:
+        self._answers = list(answers)
+        self.calls = 0
+
+    def __call__(self) -> bool:
+        self.calls += 1
+        answer = self._answers.pop(0) if self._answers else True
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+
+def test_without_a_reopen_hook_failed_reads_never_reopen(source, make_reader):
+    reader = make_reader(retry_s=0.0, reopen_after=2)
+    for _ in range(5):
+        source.push(False, None)
+    reader.start()
+    assert source.wait_calls(6)
+    assert reader.failed_reads == 5
+    assert reader.reopens == 0  # V4L2 and files keep the old behaviour: no hook, no reopen
+
+
+def test_the_stream_is_reopened_after_reopen_after_consecutive_failed_reads(source, make_reader):
+    hook = Reopener(True)
+    reader = make_reader(retry_s=0.0, reopen=hook, reopen_after=3, reopen_backoff_s=0.0)
+    for _ in range(3):
+        source.push(False, None)
+    reader.start()
+    assert wait_until(lambda: reader.reopens == 1)
+    source.push(True, "a", t=1.0)
+    assert wait_until(lambda: reader.failed_reads == 0)  # a good read after the reopen resets the count
+    assert reader.take() == ("a", 1.0)
+    assert hook.calls == 1
+
+
+def test_a_successful_reopen_does_not_hide_a_dead_camera(source, make_reader):
+    """The count only resets on a good read, so the driver's 'not delivering frames' error still fires."""
+    hook = Reopener(True, True, True)
+    reader = make_reader(retry_s=0.0, reopen=hook, reopen_after=2, reopen_backoff_s=0.0)
+    for _ in range(4):
+        source.push(False, None)
+    reader.start()
+    assert wait_until(lambda: hook.calls == 2)  # at 2 and at 4 failures
+    assert reader.failed_reads == 4
+
+
+def test_a_failed_or_raising_reopen_backs_off_and_is_reported(source, make_reader):
+    hook = Reopener(RuntimeError("503 Service Unavailable"))
+    reader = make_reader(retry_s=0.0, reopen=hook, reopen_after=1, reopen_backoff_s=3600.0)
+    source.push(False, None)
+    reader.start()
+    assert wait_until(lambda: hook.calls == 1)
+    assert wait_until(lambda: "503" in reader.last_error)
+    assert reader.reopens == 0
+    reader.stop()  # the backoff is interruptible
+    assert not reader.is_alive
+    assert source.calls == 1  # it backed off after the failed reopen instead of reading again at once
+
+
+def test_reopen_after_must_be_positive():
+    with pytest.raises(ValueError):
+        LatestFrameReader(lambda: (False, None), lambda: 0.0, reopen=lambda: True, reopen_after=0)

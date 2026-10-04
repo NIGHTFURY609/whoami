@@ -3,7 +3,6 @@
 ros_node.py copies the few fields it needs out of a message and calls one of these; the result is exactly the
 `source` that app.py's encode callback for that layer consumes (see `_layer_encoders` there):
 
-  cloud       cloud_source          {"fields", "point_step", "n_points", "is_bigendian", "data"}
   trajectory  trajectory_source     (N, 7) float32 x y z qx qy qz qw
   grid        grid_source           {"cells", "resolution", "origin_xy", "origin_yaw"}
   live        cloud_source -> within_range -> transform_points: {"xyz": (N, 3) float32}   (built by the caller)
@@ -62,12 +61,10 @@ class MapConfig:
     """The `map:` block of config/api.yaml. The defaults here and in that file are the same values (a test
     compares them), so a gateway started without the file behaves like one started with it."""
 
-    # --- what the HTTP layer encodes with (create_app tunables)
-    cloud_point_budget: int = 500_000
-    cloud_spacing_m: float = 0.05
-    # --- the live scan: Dev 1's depth cloud, range-gated on its optical depth, in the map frame; at most
-    # live_point_budget points served (spatial hash at cloud_spacing_m, like the map cloud)
-    live_point_budget: int = 20_000
+    # --- the live scan (create_app tunables): Dev 1's depth cloud, range-gated on its optical depth, in the
+    # map frame; thinned to one point per voxel of live_spacing_m, at most live_point_budget points served
+    live_point_budget: int = 150_000
+    live_spacing_m: float = 0.02
     live_range_min_m: float = 0.3
     live_range_max_m: float = 8.0
     # --- demand: heavy subscriptions live this long after the last GET /api/v1/map; stats go quiet after
@@ -75,16 +72,13 @@ class MapConfig:
     idle_timeout_s: float = 10.0
     stats_stale_s: float = 5.0
     # --- inputs
-    cloud_topic: str = "/rtabmap/cloud_map"
     trajectory_topic: str = "/rtabmap/mapPath"
     grid_topic: str = "/global_costmap/costmap"
     live_cloud_topic: str = "/perception/depth_cloud"
     map_stats_topic: str = "/ugv/map/stats"
 
     def __post_init__(self) -> None:
-        if not isinstance(self.cloud_point_budget, int) or self.cloud_point_budget < 0:
-            raise ValueError(f"cloud_point_budget must be an integer >= 0, got {self.cloud_point_budget!r}")
-        _finite_positive("cloud_spacing_m", self.cloud_spacing_m)
+        _finite_positive("live_spacing_m", self.live_spacing_m)
         _int_at_least("live_point_budget", self.live_point_budget, 0)
         _finite_positive("live_range_max_m", self.live_range_max_m)
         if not (isinstance(self.live_range_min_m, (int, float)) and math.isfinite(self.live_range_min_m)
@@ -100,9 +94,8 @@ class MapConfig:
     def app_kwargs(self) -> dict[str, Any]:
         """The create_app keyword arguments this block sets."""
         return {
-            "cloud_point_budget": self.cloud_point_budget,
-            "cloud_spacing_m": self.cloud_spacing_m,
             "live_point_budget": self.live_point_budget,
+            "live_spacing_m": self.live_spacing_m,
         }
 
 

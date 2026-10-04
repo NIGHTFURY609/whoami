@@ -1,5 +1,5 @@
 // Pure helpers for the 3D map scene (scene.ts): where the camera goes, where the cost-grid quad lies, how big the
-// ground grid is and the live cloud's height band. No three.js and no DOM, so they are tested in node. World frame =
+// ground grid is, the live terrain's height band and the car's size. No three.js and no DOM, so they are tested in node. World frame =
 // the map frame: metres, x forward/east, y left/north, z up. (The view's toggles live in mapToggles.ts.)
 
 export interface Vec3 { x: number; y: number; z: number }
@@ -131,14 +131,21 @@ export function groundGridFor(bounds: Bounds | null): GroundGrid {
   return { cx: snap((bounds.minX + bounds.maxX) / 2), cy: snap((bounds.minY + bounds.maxY) / 2), size, cell }
 }
 
-// ---- live cloud colours ---------------------------------------------------------------------------
-// The live scan is coloured over a fixed height band around the robot's base rather than its own min..max, so a
-// colour means the same height from one scan to the next (outliers do not repaint it) and the ground sits a quarter
-// of the way up the ramp: bright enough to read on the dark background instead of the ramp's near-black low end.
-export const LIVE_BAND_BELOW_M = 0.75
-export const LIVE_BAND_ABOVE_M = 2.25
+// ---- live heat colours ----------------------------------------------------------------------------
+// The live terrain and scan are coloured (blue low, through cyan, green and yellow, to red high) over a fixed band
+// around the robot's base rather than their own min..max, so a colour means the same height from one scan to the next
+// (outliers do not repaint it). The band is sized for a small RC car: the ground sits a fifth of the way up (blue),
+// a 0.5 m obstacle is in the middle (green to yellow) and anything 1.2 m above the base or more is red.
+export const HEAT_BAND_BELOW_M = 0.3
+export const HEAT_BAND_ABOVE_M = 1.2
 
-export function liveHeightBand(groundZ: number | null): [number, number] {
+export function heatHeightBand(groundZ: number | null): [number, number] {
   const z0 = groundZ !== null && Number.isFinite(groundZ) ? groundZ : 0
-  return [z0 - LIVE_BAND_BELOW_M, z0 + LIVE_BAND_ABOVE_M]
+  return [z0 - HEAT_BAND_BELOW_M, z0 + HEAT_BAND_ABOVE_M]
 }
+
+// ---- the car --------------------------------------------------------------------------------------
+// A 1:10 RC car, drawn at the robot pose (base_link at its centre) and as the travelled path's width. A display size
+// only: Nav2 plans with its own footprint (the D25 placeholder until Dev 5's footprint files exist).
+export const CAR_LENGTH_M = 0.43
+export const CAR_WIDTH_M = 0.2

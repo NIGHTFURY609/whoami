@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
-  DEFAULT_TOGGLES, enabledLayers, parseToggles, parseView, slotOnError, slotOnProps, slotState, toggled, type MapToggles,
+  DEFAULT_TOGGLES, enabledLayers, parseToggles, parseView, slotOnError, slotOnProps, slotState, toggled, withLiveMode,
+  type MapToggles,
 } from './mapToggles'
 
 describe('persisted toggles', () => {
@@ -14,17 +15,19 @@ describe('persisted toggles', () => {
   })
 
   it('shows every layer by default', () => {
-    expect(DEFAULT_TOGGLES).toEqual({ cloud: true, live: true, trajectory: true, grid: true, images: true })
+    expect(DEFAULT_TOGGLES).toEqual({ live: true, liveMode: 'terrain', trajectory: true, grid: true, images: true })
   })
 
   it('reads each stored value it understands and keeps the default for the rest', () => {
-    // keys of removed layers (elevation and its colour mode) are ignored, like any other unknown key
-    const t = parseToggles(JSON.stringify({ cloud: false, grid: 'no', images: false, elevation: true, mode: 'obstacle' }))
-    expect(t).toEqual({ ...DEFAULT_TOGGLES, cloud: false, images: false })
+    // keys of removed layers (the map cloud, elevation and its colour mode) are ignored, like any other unknown key
+    const t = parseToggles(JSON.stringify({ cloud: false, grid: 'no', images: false, elevation: true, mode: 'obstacle', liveMode: 'scan' }))
+    expect(t).toEqual({ ...DEFAULT_TOGGLES, images: false, liveMode: 'scan' })
+    expect(t).not.toHaveProperty('cloud')
+    expect(parseToggles(JSON.stringify({ liveMode: 'mesh' })).liveMode).toBe('terrain')
   })
 
   it('round-trips what the view writes', () => {
-    const t: MapToggles = { cloud: false, live: true, trajectory: false, grid: false, images: true }
+    const t: MapToggles = { live: true, liveMode: 'scan', trajectory: false, grid: false, images: true }
     expect(parseToggles(JSON.stringify(t))).toEqual(t)
   })
 
@@ -37,18 +40,25 @@ describe('persisted toggles', () => {
   })
 
   it('flips one toggle from the state it is given, so two flips in one render both count', () => {
-    const once = toggled(DEFAULT_TOGGLES, 'cloud')
-    expect(once).toEqual({ ...DEFAULT_TOGGLES, cloud: false })
-    expect(toggled(once, 'cloud')).toEqual(DEFAULT_TOGGLES)
+    const once = toggled(DEFAULT_TOGGLES, 'trajectory')
+    expect(once).toEqual({ ...DEFAULT_TOGGLES, trajectory: false })
+    expect(toggled(once, 'trajectory')).toEqual(DEFAULT_TOGGLES)
     // two updaters queued against the same render: the second sees the first's result
     const queued = [(t: MapToggles) => toggled(t, 'grid'), (t: MapToggles) => toggled(t, 'live')]
     expect(queued.reduce((t, f) => f(t), DEFAULT_TOGGLES)).toEqual({ ...DEFAULT_TOGGLES, grid: false, live: false })
-    expect(DEFAULT_TOGGLES.cloud).toBe(true) // never mutated
+    expect(DEFAULT_TOGGLES.grid).toBe(true) // never mutated
+  })
+
+  it('switches the live mode without touching the rest', () => {
+    const scan = withLiveMode(DEFAULT_TOGGLES, 'scan')
+    expect(scan).toEqual({ ...DEFAULT_TOGGLES, liveMode: 'scan' })
+    expect(DEFAULT_TOGGLES.liveMode).toBe('terrain')
   })
 
   it('turns toggles into the layers to fetch; the image panels fetch nothing', () => {
-    const t: MapToggles = { ...DEFAULT_TOGGLES, cloud: false, live: true, trajectory: false, grid: false, images: false }
-    expect(enabledLayers(t)).toEqual({ cloud: false, live: true, trajectory: false, grid: false })
+    const t: MapToggles = { ...DEFAULT_TOGGLES, live: true, trajectory: false, grid: false, images: false }
+    expect(enabledLayers(t)).toEqual({ live: true, trajectory: false, grid: false })
+    expect(enabledLayers({ ...t, liveMode: 'scan' })).toEqual(enabledLayers(t)) // both modes fetch the same layer
     expect(enabledLayers({ ...t, images: true })).toEqual(enabledLayers(t))
   })
 })

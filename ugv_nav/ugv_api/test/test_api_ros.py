@@ -53,7 +53,7 @@ STATS_STALE_S = 1.5
 CLOUD, PATH = "/rtabmap/cloud_map", "/rtabmap/mapPath"
 GRID, DEPTH_CLOUD = "/global_costmap/costmap", "/perception/depth_cloud"
 MAP_STATS = "/ugv/map/stats"
-HEAVY_TOPICS = (CLOUD, PATH, GRID, DEPTH_CLOUD)
+HEAVY_TOPICS = (PATH, GRID, DEPTH_CLOUD)
 GATEWAY_STAT_KEYS = {"cloud_source_points", "map_inputs_alive", "map_rejects", "map_restarts", "map_last_reject"}
 # A map thread that stopped ticking is reported not alive after MAP_ALIVE_S; the gateway checks every 0.5 s.
 MAP_ALIVE_BOUND = ros_node.MAP_ALIVE_S + 3.0
@@ -117,14 +117,13 @@ class Inputs:
 
 
 class MapPubs:
-    """Publishers for the map inputs, with the durability each real publisher uses: RTAB-Map's cloud and the
-    map stats are latched (transient local); the path, the depth cloud and the perception stats are volatile."""
+    """Publishers for the map inputs, with the durability each real publisher uses: the map stats are latched
+    (transient local); the path, the depth cloud and the perception stats are volatile."""
 
     def __init__(self, node) -> None:
         latched = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
         volatile = QoSProfile(depth=1)
         self.node = node
-        self.cloud = node.create_publisher(PointCloud2, CLOUD, latched)
         self.path = node.create_publisher(Path, PATH, volatile)
         self.depth_cloud = node.create_publisher(PointCloud2, DEPTH_CLOUD, volatile)
         self.map_stats = node.create_publisher(String, MAP_STATS, latched)
@@ -460,18 +459,6 @@ def _fields(*names):
     return [PointField(name=n, offset=4 * i, datatype=PointField.FLOAT32, count=1) for i, n in enumerate(names)]
 
 
-def make_rgb_cloud(xyz, rgb, stamp, frame="map"):
-    """RTAB-Map's layout: x y z, 4 bytes padding, packed rgb at 16, 32-byte records."""
-    word = ((rgb[:, 0].astype(np.uint32) << 16) | (rgb[:, 1].astype(np.uint32) << 8) | rgb[:, 2]).view(np.float32)
-    msg = PointCloud2()
-    msg.header.stamp, msg.header.frame_id = stamp, frame
-    msg.height, msg.width, msg.point_step, msg.is_dense = 1, len(xyz), 32, True
-    msg.row_step = 32 * len(xyz)
-    msg.fields = _fields("x", "y", "z") + [PointField(name="rgb", offset=16, datatype=PointField.FLOAT32, count=1)]
-    msg.data = _pack([xyz[:, 0], xyz[:, 1], xyz[:, 2], word], [0, 4, 8, 16], 32)
-    return msg
-
-
 def make_xyz_cloud(xyz, stamp, frame="camera_optical_frame"):
     """Dev 1's /perception/depth_cloud layout: x y z float32, 12-byte records, unorganised, not dense."""
     msg = PointCloud2()
@@ -505,46 +492,18 @@ def make_grid(cells, resolution, origin, stamp, yaw=0.0, frame="map"):
     return msg
 
 
-def test_cloud_and_trajectory_published_on_ros_come_out_of_http_decoded(graph):
+def test_trajectory_published_on_ros_comes_out_of_http_decoded(graph):
     c, pubs = graph["client"], graph["pubs"]
-    xyz = np.array([[0, 0, 0], [1, 2, 3], [-1.5, 0.5, 2], [4, -4, 0.25], [0.125, 0.25, 0.5]], dtype=np.float32)
-    rgb = np.array([[255, 0, 0], [0, 255, 0], [0, 0, 255], [10, 20, 30], [250, 128, 7]], dtype=np.uint8)
-    pubs.cloud.publish(make_rgb_cloud(xyz, rgb, pubs.now()))  # latched: out before anyone watches
     rows = [(0, 0, 0, 0, 0, 0, 1), (3, 4, 0, 0, 0, 1, 0), (3, 4, 12, 0.5, 0.5, 0.5, 0.5)]
 
     with watching(c):
-        cloud = mapread.cloud(_fetch(c, "/map/cloud").content)  # only a transient-local subscription gets it
         traj = mapread.trajectory(
             _fetch(c, "/map/trajectory", publish=lambda: pubs.path.publish(make_path(rows, pubs.now()))).content)
         status = _map_status(c)
 
-    assert cloud["count"] == 5 and cloud["source_count"] == 5 and cloud["has_rgb"]
-    assert np.array_equal(cloud["xyz"], xyz) and np.array_equal(cloud["rgb"], rgb)
     assert traj["count"] == 3 and traj["length_m"] == pytest.approx(17.0)
     assert traj["poses"].tolist() == [[float(v) for v in r] for r in rows]
-    assert status["seq"]["cloud"] >= 1 and status["seq"]["trajectory"] >= 1
-    assert status["stats"]["cloud_source_points"] == 5  # gateway statistic: points in the last cloud_map
-
-
-def test_a_newer_cloud_replaces_the_older_one_and_never_changes_what_was_served(graph):
-    c, pubs, node = graph["client"], graph["pubs"], graph["pub_node"]
-    first = np.array([[1, 1, 1], [2, 2, 2]], dtype=np.float32)
-    second = np.array([[9, 9, 9], [8, 8, 8], [7, 7, 7]], dtype=np.float32)
-    grey = np.full((3, 3), 128, dtype=np.uint8)
-    def with_points(n):
-        r = c.get("/map/cloud")
-        return r if r.status_code == 200 and mapread.cloud(r.content)["count"] == n else None
-
-    with watching(c):
-        assert _wait(lambda: _subscribed(node, [CLOUD]), timeout=8.0)  # a latched sample only reaches a live sub
-        pubs.cloud.publish(make_rgb_cloud(first, grey[:2], pubs.now()))
-        a = _wait(lambda: with_points(2))
-        assert a is not None
-        kept = a.content
-        pubs.cloud.publish(make_rgb_cloud(second, grey, pubs.now()))
-        b = _wait(lambda: with_points(3))
-    assert b is not None and np.array_equal(mapread.cloud(b.content)["xyz"], second)
-    assert np.array_equal(mapread.cloud(kept)["xyz"], first)  # the earlier body is untouched
+    assert status["seq"]["trajectory"] >= 1
 
 
 def test_heavy_subscriptions_exist_only_while_a_client_is_watching(graph):
@@ -554,6 +513,7 @@ def test_heavy_subscriptions_exist_only_while_a_client_is_watching(graph):
     with watching(c):
         assert _wait(lambda: _subscribed(node, HEAVY_TOPICS), timeout=8.0), [
             (t, node.count_subscribers(t)) for t in HEAVY_TOPICS]
+        assert node.count_subscribers(CLOUD) == 0, "the reconstruction cloud is not a viewer layer any more"
     # no heartbeat for longer than IDLE_S: the demand timer destroys them (it ticks once a second)
     assert _wait(lambda: all(node.count_subscribers(t) == 0 for t in HEAVY_TOPICS), timeout=IDLE_S + 6.0), [
         (t, node.count_subscribers(t)) for t in HEAVY_TOPICS]
@@ -853,7 +813,7 @@ def test_a_failing_map_health_update_never_stops_the_gateways_executor():
 def test_layers_in_another_frame_are_refused_and_an_empty_frame_is_accepted(graph):
     c, pubs, node, gw = graph["client"], graph["pubs"], graph["pub_node"], graph["gw"]
     cells = np.zeros((6, 8), dtype=np.int8)
-    kinds = ("frame_cloud", "frame_trajectory", "frame_grid")
+    kinds = ("frame_trajectory", "frame_grid")
 
     def counts():
         rejects = gw.map_rejects
@@ -870,16 +830,12 @@ def test_layers_in_another_frame_are_refused_and_an_empty_frame_is_accepted(grap
 
         def publish_odom_layers():
             now = pubs.now()
-            pubs.cloud.publish(make_rgb_cloud(np.array([[901, 902, 903]], dtype=np.float32),
-                                              np.zeros((1, 3), dtype=np.uint8), now, frame="odom"))
             pubs.path.publish(make_path([(901, 902, 903, 0, 0, 0, 1)], now, frame="odom"))
             costmap.publish(make_grid(cells, 0.2, (0.0, 0.0), now, frame="odom"))  # a local costmap, say
 
         refused = _wait(lambda: (publish_odom_layers(), all(counts()[k] > before[k] for k in kinds))[1], timeout=12.0)
         assert refused, f"not every layer was refused: {before} -> {counts()}"
         # nothing of it was served as a map-frame layer
-        cloud = served("/map/cloud", mapread.cloud)
-        assert cloud is None or 901.0 not in cloud["xyz"]
         trajectory = served("/map/trajectory", mapread.trajectory)
         assert trajectory is None or 901.0 not in trajectory["poses"][:, 0]
         grid = served("/map/grid", mapread.grid)
@@ -901,12 +857,11 @@ def test_an_organised_cloud_with_padded_rows_is_refused(graph):
     msg.height, msg.width, msg.point_step, msg.row_step, msg.is_dense = 2, 3, 12, 40, True  # 4 bytes of padding per row
     msg.fields = _fields("x", "y", "z")
     msg.data = bytes(80)
-    before = gw.map_rejects.get("cloud", 0)
+    before = gw.map_rejects.get("live", 0)
     with watching(c):
-        assert _wait(lambda: _subscribed(node, [CLOUD]), timeout=8.0)
-        pubs.cloud.publish(msg)
-        assert _wait(lambda: gw.map_rejects.get("cloud", 0) > before)
-        r = c.get("/map/cloud")
+        assert _wait(lambda: _subscribed(node, [DEPTH_CLOUD]), timeout=8.0)
+        assert _wait(lambda: (pubs.depth_cloud.publish(msg), gw.map_rejects.get("live", 0) > before)[1])
+        r = c.get("/map/live")
     assert r.status_code != 200 or mapread.cloud(r.content)["source_count"] != 6
 
 

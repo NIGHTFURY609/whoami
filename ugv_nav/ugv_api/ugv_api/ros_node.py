@@ -13,8 +13,7 @@ Subscribes : /camera/camera_info          sensor_msgs/CameraInfo  stamp only (§
              TF map->base_link (polled; the pose is what GET /map/pose and the SSE `pose` event report)
              map viewer inputs, on a node of their own (ugv_api_map) in a second rclpy context (class _MapInputs):
                always on : /ugv/map/stats                               std_msgs/String (JSON)
-               on demand : /rtabmap/cloud_map, /rtabmap/mapPath, /global_costmap/costmap,
-                           /perception/depth_cloud (live)
+               on demand : /rtabmap/mapPath, /global_costmap/costmap, /perception/depth_cloud (live)
 Publishes  : /ugv/e_stop                  std_msgs/Bool           latched; re-published while asserted
 Clients    : /navigate_to_pose            nav2_msgs/action/NavigateToPose (map-frame goals, §11)
              <rtabmap ns>/set_mode_mapping, set_mode_localization  std_srvs/Empty (§10)
@@ -378,7 +377,7 @@ class _MapInputs:
     publisher turned out to offer something else. Losing the publisher does not change anything: the
     subscription is kept for when it comes back.
 
-    Frames: cloud, trajectory and grid are served as map-frame layers, so a message whose
+    Frames: trajectory and grid are served as map-frame layers, so a message whose
     `frame_id` is neither the map frame nor empty (a local costmap is in `odom`) is refused and counted.
     """
 
@@ -417,7 +416,6 @@ class _MapInputs:
             c = cfg
             guard = self._guarded
             self._specs: dict[str, tuple[str, type, Callable[[Any], None]]] = {
-                "cloud": (c.cloud_topic, PointCloud2, guard("cloud", self._on_cloud)),
                 "trajectory": (c.trajectory_topic, Path, guard("trajectory", self._on_path)),
                 "grid": (c.grid_topic, OccupancyGrid, guard("grid", self._on_grid)),
                 "live": (c.live_cloud_topic, PointCloud2, guard("live", self._on_live)),
@@ -532,11 +530,6 @@ class _MapInputs:
     def _stamp_s(self, msg: Any) -> float:
         return ms.stamp_seconds(msg.header.stamp.sec, msg.header.stamp.nanosec, fallback_s=self._gw.now_ns() / 1e9)
 
-    def _count(self, key: str, value: int) -> None:
-        with self._state_lock:
-            self._gateway_stats[key] = int(value)
-            self._publish_gateway_locked()
-
     def _in_map_frame(self, name: str, msg: Any) -> bool:
         """False (and counted) for a message in some other frame; an empty frame_id is taken as the map frame."""
         frame = msg.header.frame_id.lstrip("/")
@@ -619,13 +612,6 @@ class _MapInputs:
             "height": msg.height,
             "row_step": msg.row_step,
         }
-
-    def _on_cloud(self, msg: PointCloud2) -> None:
-        if not self._in_map_frame("cloud", msg):
-            return
-        source = ms.cloud_source(**self._cloud_args(msg))  # a view of msg.data, which rclpy never reuses
-        self._maps.put("cloud", source, self._stamp_s(msg))
-        self._count("cloud_source_points", source["n_points"])
 
     def _on_path(self, msg: Path) -> None:
         if not self._in_map_frame("trajectory", msg):

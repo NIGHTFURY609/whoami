@@ -9,9 +9,9 @@ wrong distortion lengths.
 
 **The one exception: a flagged placeholder.** A new camera has to be running before it can be calibrated, and
 the stack can only be brought up and checked with some K. For that, and only that, a file may carry the
-top-level key `placeholder: true` (it must be a boolean; anything else is rejected). `phone_640x480.yaml` is
-one: the laptop webcam's K and D copied unchanged, with a header saying it is not a calibration of the phone.
-What happens to it:
+top-level key `placeholder: true` (it must be a boolean; anything else is rejected). `phone_640x480.yaml` was
+one (the laptop webcam's K and D copied unchanged) until the phone was calibrated on 2026-10-03; its header records
+how. What happens to a flagged file:
 
 - The loader accepts it and sets `CameraCalibration.placeholder`. Nothing else is relaxed: K is still
   validated, and the driver still refuses a camera that delivers another resolution.
@@ -27,9 +27,14 @@ What happens to it:
 Replacing the phone placeholder (hardware steps, done by the owner):
 
 1. Lock the phone's focus and exposure (autofocus changes the focal length, so K would differ between views;
-   auto-exposure changes brightness and motion blur while you calibrate). Mount it the way it will be used.
+   auto-exposure changes brightness and motion blur while you calibrate). Mount it the way it will be used. With
+   the browser page (`phone.html`, `ugv_bringup/README.md` "Phone browser camera over a Cloudflare tunnel"), its
+   **LOCK FOCUS + EXPOSURE** button does this where the browser allows it (Android Chrome). iOS gives a web page
+   no focus or exposure control: calibrate an iPhone in steady light and expect K to vary with focus distance.
 2. Run the driver in calibration mode against the phone's stream; it publishes raw images only, no CameraInfo:
    `ros2 launch ugv_bringup camera.launch.py calibration_mode:=true device:=<stream URL> width:=640 height:=480`
+   (browser page: `webcam_stream.py --phone` running and the page streaming, `device:=http://host.docker.internal:8090/cam.mjpg`;
+   calibrate the browser stream, not the phone's camera app, because it is the 640x480 mode the page sends)
 3. Calibrate with `cameracalibrator` (see "Real camera" below), at 640x480.
 4. Save the result as `ugv_nav/config/cameras/phone_640x480.yaml`, with the header described below.
 5. Remove the `placeholder` line (the flag only ever marks stand-in numbers). `allow_placeholder_calibration` is then

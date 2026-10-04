@@ -9,7 +9,7 @@ import pytest
 
 from ugv_api.mapstore import MapStore
 
-LAYERS = ("cloud", "trajectory", "grid", "live")
+LAYERS = ("trajectory", "grid", "live")
 
 
 def encode_text(source, epoch, seq, stamp_s) -> bytes:
@@ -37,7 +37,7 @@ def test_layers_are_those_of_the_contract_in_order():
 def test_epoch_is_a_uint32_fixed_for_the_life_of_the_store():
     store = MapStore()
     assert isinstance(store.epoch, int) and 0 <= store.epoch <= 0xFFFFFFFF
-    store.put("cloud", "a", 1.0)
+    store.put("trajectory", "a", 1.0)
     assert store.epoch == store.epoch
 
 
@@ -76,9 +76,9 @@ def test_put_bumps_that_layer_by_one_and_leaves_the_others():
 
 def test_seq_wraps_past_zero_because_zero_means_nothing_received():
     store = MapStore()
-    store._seq["cloud"] = 0xFFFFFFFF  # white box: 4 billion puts is too many to make
-    store.put("cloud", "x", 1.0)
-    assert store.seq("cloud") == 1
+    store._seq["trajectory"] = 0xFFFFFFFF  # white box: 4 billion puts is too many to make
+    store.put("trajectory", "x", 1.0)
+    assert store.seq("trajectory") == 1
 
 
 @pytest.mark.parametrize("call", [
@@ -106,20 +106,20 @@ def test_blob_hands_the_encoder_the_stored_reference_epoch_seq_and_stamp():
 
 def test_blob_encodes_once_per_seq_and_returns_the_same_bytes_object():
     store = MapStore()
-    store.put("cloud", "v1", 1.0)
+    store.put("trajectory", "v1", 1.0)
     enc = Counting()
-    first = store.blob("cloud", enc)
-    assert store.blob("cloud", enc) is first and store.blob("cloud", enc) is first
+    first = store.blob("trajectory", enc)
+    assert store.blob("trajectory", enc) is first and store.blob("trajectory", enc) is first
     assert len(enc.calls) == 1
 
 
 def test_a_new_put_means_a_new_encode_with_the_new_seq_and_stamp():
     store = MapStore(epoch=5)
     enc = Counting()
-    store.put("cloud", "v1", 1.0)
-    store.blob("cloud", enc)
-    store.put("cloud", "v2", 2.0)
-    blob = store.blob("cloud", enc)
+    store.put("trajectory", "v1", 1.0)
+    store.blob("trajectory", enc)
+    store.put("trajectory", "v2", 2.0)
+    blob = store.blob("trajectory", enc)
     assert blob == encode_text("v2", 5, 2, 2.0)
     assert [c[2] for c in enc.calls] == [1, 2]
 
@@ -151,7 +151,7 @@ def test_an_encoder_that_raises_caches_nothing_and_leaves_the_store_usable():
 
 def test_two_concurrent_blob_calls_for_one_seq_encode_once():
     store = MapStore()
-    store.put("cloud", "v1", 1.0)
+    store.put("trajectory", "v1", 1.0)
     inside, release = threading.Event(), threading.Event()
     calls: list[int] = []
 
@@ -162,8 +162,8 @@ def test_two_concurrent_blob_calls_for_one_seq_encode_once():
         return encode_text(source, epoch, seq, stamp_s)
 
     results: list[bytes | None] = []
-    first = threading.Thread(target=lambda: results.append(store.blob("cloud", slow)))
-    second = threading.Thread(target=lambda: results.append(store.blob("cloud", slow)))
+    first = threading.Thread(target=lambda: results.append(store.blob("trajectory", slow)))
+    second = threading.Thread(target=lambda: results.append(store.blob("trajectory", slow)))
     first.start()
     assert inside.wait(5)  # the first caller is inside its encode
     second.start()
@@ -177,7 +177,7 @@ def test_two_concurrent_blob_calls_for_one_seq_encode_once():
 
 def test_blobs_of_different_layers_encode_in_parallel():
     store = MapStore()
-    store.put("cloud", "a", 1.0)
+    store.put("trajectory", "a", 1.0)
     store.put("live", "b", 1.0)
     both = threading.Barrier(2, timeout=5)  # each encoder waits for the other: only parallel encodes pass
 
@@ -186,17 +186,17 @@ def test_blobs_of_different_layers_encode_in_parallel():
         return encode_text(source, epoch, seq, stamp_s)
 
     out: dict[str, bytes | None] = {}
-    threads = [threading.Thread(target=lambda n=n: out.__setitem__(n, store.blob(n, meet))) for n in ("cloud", "live")]
+    threads = [threading.Thread(target=lambda n=n: out.__setitem__(n, store.blob(n, meet))) for n in ("trajectory", "live")]
     for t in threads:
         t.start()
     for t in threads:
         t.join(10)
-    assert out["cloud"] and out["live"], "one layer's encode blocked the other"
+    assert out["trajectory"] and out["live"], "one layer's encode blocked the other"
 
 
 def test_a_put_during_an_encode_is_never_served_as_the_new_seq():
     store = MapStore(epoch=3)
-    store.put("cloud", "v1", 1.0)
+    store.put("trajectory", "v1", 1.0)
     inside, release = threading.Event(), threading.Event()
     calls: list[tuple] = []
 
@@ -208,16 +208,16 @@ def test_a_put_during_an_encode_is_never_served_as_the_new_seq():
         return encode_text(source, epoch, seq, stamp_s)
 
     results: list[bytes | None] = []
-    reader = threading.Thread(target=lambda: results.append(store.blob("cloud", slow_first)))
+    reader = threading.Thread(target=lambda: results.append(store.blob("trajectory", slow_first)))
     reader.start()
     assert inside.wait(5)
-    store.put("cloud", "v2", 2.0)  # the ROS thread publishes while the HTTP thread is mid-encode
+    store.put("trajectory", "v2", 2.0)  # the ROS thread publishes while the HTTP thread is mid-encode
     release.set()
     reader.join(5)
 
     assert results == [encode_text("v1", 3, 1, 1.0)]  # the in-flight caller got a consistent snapshot of seq 1
-    assert store.seq("cloud") == 2
-    fresh = store.blob("cloud", slow_first)
+    assert store.seq("trajectory") == 2
+    fresh = store.blob("trajectory", slow_first)
     assert fresh == encode_text("v2", 3, 2, 2.0), "the seq-1 blob was served as seq 2"
     assert calls == [("v1", 1), ("v2", 2)]
 

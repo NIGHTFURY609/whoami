@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { GridFrame } from './codec'
-import { buildGridTexture, colorByHeight, depthToRgba, writeRamp } from './geometry'
+import { buildGridTexture, depthToRgba, ribbonStrip, writeRamp } from './geometry'
 
 const NaN_ = Number.NaN
 
@@ -10,7 +10,6 @@ function rampAt(t: number): number[] {
   return Array.from(out)
 }
 
-const rgbAt = (colors: Uint8Array | Uint8ClampedArray, i: number, stride = 3) => Array.from(colors.subarray(i * stride, i * stride + 3))
 const luminance = ([r, g, b]: number[]) => 0.2126 * r + 0.7152 * g + 0.0722 * b
 
 describe('colour ramp', () => {
@@ -48,49 +47,43 @@ describe('colour ramp', () => {
   })
 })
 
-describe('colorByHeight', () => {
-  const pts = (...z: number[]) => Float32Array.from(z.flatMap((v, i) => [i, -i, v]))
+describe('ribbonStrip', () => {
+  const path = (...p: [number, number, number][]) => Float32Array.from(p.flat())
+  const vertex = (r: { positions: Float32Array }, i: number) => Array.from(r.positions.subarray(3 * i, 3 * i + 3))
 
-  it('colours each point by its z from the shared ramp', () => {
-    const c = colorByHeight(pts(0, 1, 2, 4), 0, 4)
-    expect(c).toBeInstanceOf(Uint8Array)
-    expect(c.length).toBe(12)
-    expect(rgbAt(c, 0)).toEqual(rampAt(0))
-    expect(rgbAt(c, 1)).toEqual(rampAt(0.25))
-    expect(rgbAt(c, 2)).toEqual(rampAt(0.5))
-    expect(rgbAt(c, 3)).toEqual(rampAt(1))
+  it('puts a left and a right vertex half the width either side of each point, lifted', () => {
+    const r = ribbonStrip(path([0, 0, 0], [2, 0, 0]), 0.2, 0.01)!
+    expect(r.positions.length).toBe(12)
+    const close = (v: number[], w: number[]) => v.forEach((x, i) => expect(x).toBeCloseTo(w[i], 6))
+    close(vertex(r, 0), [0, 0.1, 0.01]) // left of +x is +y
+    close(vertex(r, 1), [0, -0.1, 0.01])
+    close(vertex(r, 2), [2, 0.1, 0.01])
+    close(vertex(r, 3), [2, -0.1, 0.01])
+    expect(Array.from(r.index)).toEqual([0, 1, 2, 1, 3, 2])
+    expect(r.lengthM).toBeCloseTo(2, 6)
   })
 
-  it('clamps z outside zMin..zMax', () => {
-    const c = colorByHeight(pts(-10, 10), 0, 1)
-    expect(rgbAt(c, 0)).toEqual(rampAt(0))
-    expect(rgbAt(c, 1)).toEqual(rampAt(1))
+  it('turns with the path, using the direction through each point', () => {
+    const r = ribbonStrip(path([0, 0, 0], [1, 0, 0], [1, 1, 0]), 2)!
+    const [x, y] = vertex(r, 2) // the corner: direction (1, 1) / sqrt 2, left normal (-1, 1) / sqrt 2
+    expect(x).toBeCloseTo(1 - Math.SQRT1_2, 6)
+    expect(y).toBeCloseTo(Math.SQRT1_2, 6)
+    expect(r.index.length).toBe(12)
+    expect(r.lengthM).toBeCloseTo(2, 6)
   })
 
-  it('gives every point the mid colour when zMax <= zMin', () => {
-    for (const [lo, hi] of [[2, 2], [3, 1]]) {
-      const c = colorByHeight(pts(0, 2, 9), lo, hi)
-      for (let i = 0; i < 3; i++) expect(rgbAt(c, i)).toEqual(rampAt(0.5))
-    }
+  it('skips repeated and non-finite points, and is null below two points', () => {
+    const r = ribbonStrip(path([0, 0, 0], [0, 0, 0], [0.001, 0, 0], [Number.NaN, 0, 0], [1, 0, 0]), 0.2)!
+    expect(r.positions.length).toBe(12) // two points kept
+    expect(ribbonStrip(path([0, 0, 0], [0, 0.001, 0]), 0.2)).toBeNull()
+    expect(ribbonStrip(new Float32Array(0), 0.2)).toBeNull()
   })
 
-  it('gives non-finite z the low colour', () => {
-    const c = colorByHeight(pts(NaN_, Infinity, -Infinity, 2), 0, 4)
-    expect(rgbAt(c, 0)).toEqual(rampAt(0))
-    expect(rgbAt(c, 1)).toEqual(rampAt(0))
-    expect(rgbAt(c, 2)).toEqual(rampAt(0))
-    expect(rgbAt(c, 3)).toEqual(rampAt(0.5))
-  })
-
-  it('returns an empty array for no points and handles 500k points', () => {
-    expect(colorByHeight(new Float32Array(0), 0, 1).length).toBe(0)
-    const n = 500_000
-    const xyz = new Float32Array(3 * n)
-    for (let i = 0; i < n; i++) xyz[3 * i + 2] = i / n
-    const c = colorByHeight(xyz, 0, 1)
-    expect(c.length).toBe(3 * n)
-    expect(rgbAt(c, 0)).toEqual(rampAt(0))
-    expect(luminance(rgbAt(c, n - 1))).toBeGreaterThan(luminance(rgbAt(c, 0)))
+  it('keeps a finite width on a path that doubles straight back', () => {
+    const r = ribbonStrip(path([0, 0, 0], [1, 0, 0], [0, 0, 0]), 0.2)!
+    expect(r.positions.every(Number.isFinite)).toBe(true)
+    const [, y] = vertex(r, 2)
+    expect(Math.abs(y)).toBeCloseTo(0.1, 6)
   })
 })
 
@@ -107,10 +100,14 @@ describe('buildGridTexture', () => {
     expect(t.length).toBe(3 * 2 * 4)
   })
 
-  it('makes unknown (-1) and free (0) cells fully transparent', () => {
+  it('makes unknown (-1) cells fully transparent and paints free (0) cells as a translucent green path', () => {
     const t = buildGridTexture(grid(2, 1, [-1, 0]))
     expect(texel(t, 0)[3]).toBe(0)
-    expect(texel(t, 1)[3]).toBe(0)
+    const [r, g, b, a] = texel(t, 1)
+    expect(g).toBeGreaterThan(r)
+    expect(g).toBeGreaterThan(b)
+    expect(a).toBeGreaterThan(0)
+    expect(a).toBeLessThan(255)
   })
 
   it('treats any other negative value as unknown', () => {
@@ -154,11 +151,11 @@ describe('buildGridTexture', () => {
   })
 
   it('keeps texture row 0 = grid row 0, row-major (a cell at row 1, col 2 of a 3 x 2 grid is texel 5)', () => {
-    const cells = [0, 0, 0, 0, 0, 100]
+    const cells = [-1, -1, -1, -1, -1, 100]
     const t = buildGridTexture(grid(3, 2, cells))
     for (let i = 0; i < 5; i++) expect(texel(t, i)[3]).toBe(0)
     expect(texel(t, 5)[3]).toBe(255)
-    const top = buildGridTexture(grid(3, 2, [100, 0, 0, 0, 0, 0]))
+    const top = buildGridTexture(grid(3, 2, [100, -1, -1, -1, -1, -1]))
     expect(texel(top, 0)[3]).toBe(255)
   })
 

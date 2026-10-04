@@ -239,6 +239,21 @@ def test_cloud_selection_cutting_through_one_voxel_ignores_input_order():
         assert rows(got["xyz"]) == rows(want["xyz"])
 
 
+def test_thin_keeps_one_point_per_occupied_voxel_and_drops_non_finite_rows():
+    # a 1 m slab sampled at 2 cm, plus NaN rows: every 10 cm voxel of it keeps exactly one point (no holes,
+    # unlike the lowest-hash cut, which keeps whole voxels and drops the others)
+    g = np.arange(0.0, 1.0, 0.02, dtype=np.float32)
+    xx, yy = np.meshgrid(g, g)
+    xyz = np.stack([xx.ravel(), yy.ravel(), np.full(xx.size, 0.5, np.float32)], axis=1)
+    xyz = np.concatenate([xyz, np.full((3, 3), np.nan, np.float32)])
+    d = mapread.cloud(mc.encode_cloud(xyz, None, budget=10_000, spacing_m=0.1, thin=True, **KW))
+    assert d["source_count"] == 2500 and d["count"] == 100
+    cells = np.floor(d["xyz"][:, :2] / 0.1 + 1e-4).astype(int)
+    assert len({tuple(c) for c in cells.tolist()}) == 100
+    cut = mapread.cloud(mc.encode_cloud(xyz, None, budget=25, spacing_m=0.1, thin=True, **KW))
+    assert cut["count"] == 25 and np.isfinite(cut["xyz"]).all()
+
+
 def test_cloud_budget_larger_than_cloud_keeps_everything_in_input_order():
     xyz, rgb = random_cloud(50)
     d = mapread.cloud(mc.encode_cloud(xyz, rgb, budget=50, spacing_m=1.0, **KW))

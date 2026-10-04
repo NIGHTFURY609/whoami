@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Opt-in load rig for the gateway's map inputs. NOT part of the test suite (pytest only collects `test/`).
 
-What it measures. The gateway's map inputs receive a 1,000,000 point PointCloud2 (PCL XYZRGB layout, 32 bytes a
-point, 32 MB a message) at 2 Hz on /rtabmap/cloud_map while a viewer polls GET /api/v1/map (5 Hz) and
-GET /api/v1/map/cloud (4 Hz). Meanwhile the six §12 inputs (camera_info, mask, perception_degraded, pose_valid,
+What it measures. The gateway's map inputs receive a 1,000,000 point PointCloud2 (Dev 1's XYZ layout, 12 bytes a
+point, 12 MB a message) at 2 Hz on /perception/depth_cloud while a viewer polls GET /api/v1/map (5 Hz) and
+GET /api/v1/map/live (4 Hz). (Until 2026-10-03 it loaded RTAB-Map's /rtabmap/cloud_map, 32 MB a message, which the
+viewer no longer subscribes; the numbers below were measured with that cloud.) Meanwhile the six §12 inputs (camera_info, mask, perception_degraded, pose_valid,
 nav2_heartbeat, TF) arrive at 20 Hz from a separate process, and GET /api/v1/safety/status is sampled at 10 Hz.
 The result is the worst age each §12 watch showed and how many samples had a watch that was not ok.
 
@@ -101,30 +102,26 @@ def run_inputs() -> None:
 
 
 def run_cloud(points: int, hz: float) -> None:
-    """An N point XYZRGB cloud at `hz`, transient local like RTAB-Map's cloud_map."""
+    """An N point XYZ cloud at `hz`, volatile like Dev 1's /perception/depth_cloud. It is stamped in the map frame
+    (an identity TF for the gateway) with z, the optical depth the gateway range-gates on, inside 0.5 .. 7.5 m."""
     import numpy as np
     import rclpy
-    from rclpy.qos import DurabilityPolicy, QoSProfile
+    from rclpy.qos import QoSProfile
     from sensor_msgs.msg import PointCloud2, PointField
 
-    step = 32  # PCL PointXYZRGB: x y z, 4 bytes of padding, rgb at 16
+    step = 12  # Dev 1's layout: x y z float32
     rng = np.random.default_rng(1)
-    buf = np.zeros((points, step), dtype=np.uint8)
-    xyz = np.column_stack([rng.uniform(-50, 50, points), rng.uniform(-50, 50, points),
-                           rng.uniform(0, 5, points)]).astype("<f4")
-    buf[:, 0:12] = xyz.view(np.uint8).reshape(points, 12)
-    buf[:, 16:20] = rng.integers(0, 2**24, points, dtype=np.uint32).view(np.uint8).reshape(points, 4)
-    payload = buf.reshape(-1)
+    xyz = np.column_stack([rng.uniform(-5, 5, points), rng.uniform(-5, 5, points),
+                           rng.uniform(0.5, 7.5, points)]).astype("<f4")
+    payload = xyz.view(np.uint8).reshape(-1)
 
     rclpy.init()
     node = rclpy.create_node("map_load_probe_cloud")
-    pub = node.create_publisher(PointCloud2, "/rtabmap/cloud_map",
-                                QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL))
+    pub = node.create_publisher(PointCloud2, "/perception/depth_cloud", QoSProfile(depth=1))
     msg = PointCloud2()
     msg.header.frame_id = "map"
-    msg.height, msg.width, msg.point_step, msg.row_step, msg.is_dense = 1, points, step, step * points, True
+    msg.height, msg.width, msg.point_step, msg.row_step, msg.is_dense = 1, points, step, step * points, False
     msg.fields = [PointField(name=c, offset=4 * i, datatype=PointField.FLOAT32, count=1) for i, c in enumerate("xyz")]
-    msg.fields.append(PointField(name="rgb", offset=16, datatype=PointField.FLOAT32, count=1))
     msg.data = payload
 
     def publish() -> None:
@@ -160,7 +157,7 @@ def sample(base: str, seconds: float, with_load: bool) -> dict:
                 try:
                     last_map.update(c.get("/map").json())
                     t0 = time.monotonic()
-                    r = c.get("/map/cloud")
+                    r = c.get("/map/live")
                     if r.status_code == 200:
                         cloud["ok"] += 1
                         cloud["bytes"] = len(r.content)
@@ -256,14 +253,14 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--role", choices=("probe", "inputs", "cloud"), default="probe", help=argparse.SUPPRESS)
     ap.add_argument("--seconds", type=float, default=30.0, help="how long to sample (default 30)")
-    ap.add_argument("--points", type=int, default=1_000_000, help="points per cloud (default 1,000,000 = 32 MB)")
+    ap.add_argument("--points", type=int, default=1_000_000, help="points per cloud (default 1,000,000 = 12 MB)")
     ap.add_argument("--hz", type=float, default=2.0, help="clouds per second (default 2)")
     ap.add_argument("--no-load", action="store_true", help="do not publish the cloud (baseline)")
     ap.add_argument("--max-age", type=float, default=1.0, help="fail above this worst watch age, s (default 1.0)")
     ap.add_argument("--port", type=int, default=0, help="gateway port (default: a free one)")
     args = ap.parse_args()
     if "ROS_DOMAIN_ID" not in os.environ:
-        ap.error("set ROS_DOMAIN_ID to a spare domain (for example 78): the cloud is 32 MB a message")
+        ap.error("set ROS_DOMAIN_ID to a spare domain (for example 78): the cloud is 12 MB a message")
     if args.role == "inputs":
         run_inputs()
         return 0

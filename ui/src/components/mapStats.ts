@@ -34,7 +34,6 @@ export function mapRows(s: Stats | undefined): MapRow[] {
     { k: 'keyframes', v: count(stat(s, 'keyframes')) },
     { k: 'closure links', v: count(stat(s, 'loop_closures')) },
     { k: 'path length', v: fixed(stat(s, 'path_length_m'), 'm') },
-    { k: 'cloud source pts', v: count(stat(s, 'cloud_source_points')) }, // the gateway's source count, not what is drawn
     { k: 'database', v: megabytes(stat(s, 'db_bytes')) },
     { k: 'last update', v: fixed(age(stat(s, 'last_update_age_s')), 's') },
   ]

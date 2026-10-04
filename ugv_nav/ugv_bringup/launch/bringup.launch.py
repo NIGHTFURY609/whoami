@@ -110,9 +110,10 @@ def generate_launch_description() -> LaunchDescription:
         DeclareLaunchArgument("robot", default_value=""),
         # laptop: Dev 2 timing profile for a slow-GPU laptop (ugv_localization config/*_laptop.yaml)
         DeclareLaunchArgument("localization_timing", default_value="default"),
-        # true: 3D map for the web viewer (/rtabmap/cloud_map); off by default for long missions (docs/mapping/README.md)
+        # true: RTAB-Map's whole 3D map on /rtabmap/cloud_map (RViz, tools; not the web viewer, mindmap D27); off by
+        # default for long missions (docs/mapping/README.md)
         DeclareLaunchArgument("map_assembler", default_value="false",
-                              description="true: /rtabmap/cloud_map for the web viewer (memory grows; ugv_localization)"),
+                              description="true: /rtabmap/cloud_map for RViz or tools (memory grows; ugv_localization)"),
         DeclareLaunchArgument("api_host", default_value="0.0.0.0"),
         DeclareLaunchArgument("api_port", default_value="8080"),
         OpaqueFunction(function=_setup),

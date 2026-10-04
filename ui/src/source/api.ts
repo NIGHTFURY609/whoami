@@ -71,7 +71,7 @@ export interface Navigation {
 }
 
 // The map layers the gateway serves (GET /map/{layer}); MapStatus.seq always carries every one of them.
-export const LAYERS = ['cloud', 'trajectory', 'grid', 'live'] as const
+export const LAYERS = ['trajectory', 'grid', 'live'] as const
 export type Layer = (typeof LAYERS)[number]
 
 export type StatValue = number | string | boolean | null

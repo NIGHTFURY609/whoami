@@ -102,15 +102,24 @@ class FakeStream:
         self._unblocked = False
         self.calls = 0
         self.released = False
+        self.opens = 0  # reopens by the driver after failed reads
+        self.size = (640, 480)
 
     def isOpened(self) -> bool:  # noqa: N802 (cv2 API)
+        return True
+
+    def open(self, src) -> bool:
+        with self._cond:
+            self.opens += 1
+            self._unblocked = self.released = False  # a live stream again: read() blocks until a frame is pushed
+            self._cond.notify_all()
         return True
 
     def set(self, prop, value) -> bool:
         return True
 
     def get(self, prop) -> float:
-        return {cv2.CAP_PROP_FRAME_WIDTH: 640.0, cv2.CAP_PROP_FRAME_HEIGHT: 480.0}.get(prop, 0.0)
+        return {cv2.CAP_PROP_FRAME_WIDTH: float(self.size[0]), cv2.CAP_PROP_FRAME_HEIGHT: float(self.size[1])}.get(prop, 0.0)
 
     def push(self, shade: int) -> None:
         with self._cond:
@@ -533,3 +542,33 @@ def test_a_stamp_that_would_be_negative_is_clamped_to_zero_and_logged_once(tmp_p
         ok = node._stamp(100.0)
         assert (ok.sec, ok.nanosec) == (99, 500_000_000)  # the normal case is untouched
         assert log.count("warning", "clamped") == 1
+
+
+def test_a_dropped_url_stream_is_reopened_and_frames_flow_again(tmp_path, stream, log, monkeypatch):
+    monkeypatch.setattr("ugv_bringup.nodes.camera_driver._REPORT_PERIOD_S", 0.1)
+    cal = write_cal(tmp_path)
+    with running(["-p", f"calibration_file:={cal}", "-p", f"device:={_URL}"], stream) as (node, probe, ex):
+        imgs: list = []
+        probe.create_subscription(Image, "/camera/image_raw", imgs.append, _LIVE)
+        assert spin_until(ex, lambda: node.count_subscribers("/camera/image_raw") == 1)
+        stream.unblock()  # the phone left: every read fails at once (OpenCV never recovers such a capture itself)
+        assert spin_until(ex, lambda: stream.opens >= 1)  # reopened after repeated failed reads
+        assert not imgs  # nothing was published meanwhile, no old frame repeated
+        stream.push(5)  # the phone is back
+        assert spin_until(ex, lambda: len(imgs) >= 1)
+        assert spin_until(ex, lambda: log.count("info", "reopened") >= 1)
+
+
+def test_a_stream_that_comes_back_at_another_size_is_refused_on_reopen(tmp_path, stream, log, monkeypatch):
+    monkeypatch.setattr("ugv_bringup.nodes.camera_driver._REPORT_PERIOD_S", 0.1)
+    monkeypatch.setattr("ugv_bringup.nodes.camera_driver._STALL_WARN_S", 0.3)
+    cal = write_cal(tmp_path)
+    with running(["-p", f"calibration_file:={cal}", "-p", f"device:={_URL}"], stream) as (node, probe, ex):
+        imgs: list = []
+        probe.create_subscription(Image, "/camera/image_raw", imgs.append, _LIVE)
+        stream.size = (480, 640)  # a phone held upright
+        stream.unblock()
+        assert spin_until(ex, lambda: stream.opens >= 1)
+        assert spin_until(ex, lambda: any("came back at 480x640" in m for m in _stall_warnings(log)))
+        assert spin_until(ex, lambda: stream.released)  # the wrong-size capture is closed again, never read from
+        assert not imgs

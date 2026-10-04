@@ -5,7 +5,8 @@ import {
 } from './codec'
 
 // The map view's data. GET /map is both the layer status and the gateway's demand heartbeat, so it is polled once a
-// second for exactly as long as the view is active; each layer's bytes are fetched only when that layer's epoch:seq
+// second (four times a second while the live scan is wanted, so a new scan is seen within a quarter second) for
+// exactly as long as the view is active; each layer's bytes are fetched only when that layer's epoch:seq
 // changed, at a limited rate, one request at a time per layer. Read only: nothing here sends anything but GETs.
 //
 // The scheduling lives in plain functions (nextFetches, schedule, isStale) and createMapSession, which are tested
@@ -15,12 +16,16 @@ export type Have = Record<Layer, string | null> // the epoch:seq key of the fram
 export type Enabled = Record<Layer, boolean>
 
 export const STATUS_POLL_MS = 1000
+export const STATUS_POLL_LIVE_MS = 250 // while the live layer is wanted: the status is a small JSON document
 export const STATUS_STALE_MS = 3000
 
 // Minimum time between the starts of two fetches of the same layer.
 export const MIN_INTERVAL_MS: Record<Layer, number> = {
-  cloud: 2000, trajectory: 1000, grid: 1000, live: 500,
+  trajectory: 1000, grid: 1000, live: 200,
 }
+
+// How long after one status poll started the next one starts.
+export const statusPollMs = (enabled: Enabled): number => (enabled.live ? STATUS_POLL_LIVE_MS : STATUS_POLL_MS)
 
 // A layer's version: a gateway restart changes the epoch while sequences start over, so the pair is the identity.
 export const layerKey = (status: MapStatus, layer: Layer): string => `${status.epoch}:${status.seq[layer]}`
@@ -60,17 +65,15 @@ export function isStale(lastOkMs: number | null, lastPollFailed: boolean, nowMs:
 
 // ---- frames ---------------------------------------------------------------------------------------
 type FrameOf = {
-  cloud: CloudFrame; trajectory: TrajectoryFrame; grid: GridFrame; live: CloudFrame
+  trajectory: TrajectoryFrame; grid: GridFrame; live: CloudFrame
 }
 export type Frame = FrameOf[Layer]
 type Frames = { [L in Layer]: FrameOf[L] | null }
 
-const EMPTY_FRAMES: Frames = { cloud: null, trajectory: null, grid: null, live: null }
+const EMPTY_FRAMES: Frames = { trajectory: null, grid: null, live: null }
 
-// A body becomes a frame, or null when it is not a valid one (the previous frame is then kept). `live` is the same
-// point-cloud format as `cloud`.
+// A body becomes a frame, or null when it is not a valid one (the previous frame is then kept).
 const DECODERS: { [L in Layer]: (buf: ArrayBuffer) => FrameOf[L] | null } = {
-  cloud: decodeCloud,
   trajectory: decodeTrajectory,
   grid: decodeGrid,
   live: decodeCloud,
@@ -201,7 +204,7 @@ export function createMapSession(opts: MapSessionOptions): MapSession {
       armStale()
       publishStale()
     }
-    r.pollTimer = setTimeout(() => void poll(r), Math.max(0, STATUS_POLL_MS - (now() - startedAt)))
+    r.pollTimer = setTimeout(() => void poll(r), Math.max(0, statusPollMs(enabled) - (now() - startedAt)))
   }
 
   function stop() {
