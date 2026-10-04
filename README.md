@@ -6,7 +6,7 @@
 
 *Point A to Point B with no GPS, where the vision model is a pluggable sensor and never the brain.*
 
-[![IRL tested](https://img.shields.io/badge/%E2%9C%94%20OUTDOOR_REAL_LIFE%20TESTED-Outdoors%20%C2%B7%20Kerala%20%C2%B7%203%20Oct%202026-2ea44f?style=for-the-badge)](#test-setup)
+[![IRL tested](https://img.shields.io/badge/%E2%9C%94%20FIELD%20TESTED-Outdoor_Forest_Environment%20%C2%B7%20Kerala%20%C2%B7%203%20Oct%202026-2ea44f?style=for-the-badge)](#test-setup)
 
 [![ROS 2 Lyrical](https://img.shields.io/badge/ROS%202-Lyrical%20Luth-22314E?logo=ros)](https://docs.ros.org/)
 [![Nav2](https://img.shields.io/badge/Nav2-Smac2D%20%2B%20RPP-1f6feb)](https://docs.nav2.org/)
