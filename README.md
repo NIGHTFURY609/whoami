@@ -4,7 +4,7 @@
 
 ### Camera-primary autonomous navigation for GPS-denied outdoor UGVs
 
-*One camera in, a safe `/cmd_vel` out. Point A to Point B with no GPS, where the vision model is a pluggable sensor and never the brain.*
+*Point A to Point B with no GPS, where the vision model is a pluggable sensor and never the brain.*
 
 [![ROS 2 Lyrical](https://img.shields.io/badge/ROS%202-Lyrical%20Luth-22314E?logo=ros)](https://docs.ros.org/)
 [![Nav2](https://img.shields.io/badge/Nav2-Smac2D%20%2B%20RPP-1f6feb)](https://docs.nav2.org/)
@@ -94,25 +94,6 @@ flowchart LR
 5. **Safety gate.** Nav2 only *proposes* a command. The arbiter decides whether it reaches the wheels.
 
 Full contract in [`architecture.md`](architecture.md), team split in [`dev.md`](dev.md), decision log in [`mindmap.md`](mindmap.md).
-
-<br>
-
-## Rules the system never breaks
-
-> [!IMPORTANT]
-> - **Unknown is never free.** Pixels the model is unsure about are treated as blocked, not as open ground.
-> - **Old data is not current data.** If the mask is too old, the whole camera view is marked lethal and the robot holds.
-> - **Geometry beats labels.** If depth sees an obstacle, a "traversable" label cannot clear it.
-> - **The model is not the brain.** Swapping the segmentation model takes a remap file and a confidence profile, nothing else.
-
-**What stops the robot**, highest priority first:
-
-| Priority | Trigger | Result |
-|:---:|---|---|
-| 1 | E-stop pressed | stop (stays latched across restarts) |
-| 2 | Camera, perception, localization, TF or Nav2 times out | stop |
-| 3 | Perception degraded or pose invalid | hold |
-| 4 | Everything healthy | Nav2's command goes through |
 
 <br>
 
@@ -247,11 +228,11 @@ docs/                 status report, mapping notes
 
 | Area | Member |
 |---|---|
-| Perception and vision | `@handle` |
-| SLAM and localization | `@handle` |
-| Costmaps and geometry | `@handle` |
-| Planning and control | `@handle` |
-| Safety and platform | `@handle` |
+| Perception and vision | `@ligth279` |
+| SLAM and localization | `@NIGHTFURY609` |
+| Costmaps and geometry | `@ibinpaul` |
+| Planning and control | `@sivuiii` |
+| Safety and platform | `@Baka-desu` |
 
 ## Credits
 
